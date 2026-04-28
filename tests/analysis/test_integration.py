@@ -1,1 +1,133 @@
-"""Integration tests: run Layer 1 against ../test-repos/v2-core (Uniswap V2 core)."""
+"""Layer 1 integration test: full pipeline against ../test-repos/solmate.
+
+Compiles Solmate via crytic-compile, runs the Slither fact extractor, and
+asserts on the resulting RepoFacts tree. The session-scoped fixture compiles +
+extracts once; the assertions share that result.
+
+If the sibling test-repos/solmate directory is not present (e.g. a fresh clone
+of just this project), the whole module is skipped.
+"""
+
+from pathlib import Path
+
+import pytest
+
+from solidity_flow_navigator.analysis.compile import compile_repo
+from solidity_flow_navigator.analysis.slither_facts import extract_facts
+from solidity_flow_navigator.analysis.types import Contract, Function, RepoFacts
+
+# Two levels up from this file is the project root; its sibling holds test-repos.
+SOLMATE_PATH = Path(__file__).resolve().parents[2].parent / "test-repos" / "solmate"
+
+
+@pytest.fixture(scope="session")
+def solmate_facts() -> RepoFacts:
+    if not SOLMATE_PATH.is_dir():
+        pytest.skip(f"Solmate test repo not present at {SOLMATE_PATH}")
+    cc = compile_repo(SOLMATE_PATH)
+    return extract_facts(cc, SOLMATE_PATH)
+
+
+def _contract_by_name(facts: RepoFacts, name: str) -> Contract:
+    for c in facts.contracts:
+        if c.name == name:
+            return c
+    raise AssertionError(f"contract {name!r} not found in repo")
+
+
+def _function_by_full_name(contract: Contract, full_name: str) -> Function:
+    for f in contract.functions:
+        if f.full_name == full_name:
+            return f
+    declared = sorted(fn.full_name for fn in contract.functions)
+    raise AssertionError(
+        f"function {full_name!r} not declared in {contract.name!r}; "
+        f"declared functions: {declared}"
+    )
+
+
+def test_compile_and_extract_succeed(solmate_facts: RepoFacts) -> None:
+    """Stage 5 #1: end-to-end pipeline runs without raising."""
+    assert isinstance(solmate_facts, RepoFacts)
+    assert solmate_facts.repo_path == str(SOLMATE_PATH.resolve())
+    assert len(solmate_facts.contracts) > 0
+
+
+def test_expected_entry_points_exist(solmate_facts: RepoFacts) -> None:
+    """Stage 5 #2: named Solmate entry points are present and flagged."""
+    expected = [
+        ("ERC20", "transferFrom(address,address,uint256)"),
+        ("ERC20", "permit(address,address,uint256,uint256,uint8,bytes32,bytes32)"),
+        ("ERC4626", "deposit(uint256,address)"),
+        ("ERC4626", "redeem(uint256,address,address)"),
+        ("Owned", "transferOwnership(address)"),
+    ]
+    for contract_name, fn_full_name in expected:
+        c = _contract_by_name(solmate_facts, contract_name)
+        f = _function_by_full_name(c, fn_full_name)
+        assert (
+            f.is_entry_point
+        ), f"{contract_name}.{fn_full_name} found but is_entry_point=False"
+
+
+def test_erc4626_deposit_has_internal_and_library_edges(
+    solmate_facts: RepoFacts,
+) -> None:
+    """Stage 5 #3: ERC4626.deposit has at least one internal and one library edge."""
+    erc4626 = _contract_by_name(solmate_facts, "ERC4626")
+    deposit = _function_by_full_name(erc4626, "deposit(uint256,address)")
+    kinds = [e.kind for e in deposit.calls]
+    assert (
+        kinds.count("internal") >= 1
+    ), f"expected >=1 internal call edge, got kinds={kinds}"
+    assert (
+        kinds.count("library") >= 1
+    ), f"expected >=1 library call edge, got kinds={kinds}"
+
+
+def test_some_entry_point_has_zero_call_edges(solmate_facts: RepoFacts) -> None:
+    """Stage 5 #4: empty calls is valid - guards against silently dropping them.
+
+    ERC20.transfer has zero callable IR edges in Solmate (event emissions and
+    storage manipulation do not produce CallEdges).
+    """
+    erc20 = _contract_by_name(solmate_facts, "ERC20")
+    transfer = _function_by_full_name(erc20, "transfer(address,uint256)")
+    assert transfer.is_entry_point
+    assert len(transfer.calls) == 0, (
+        f"expected 0 call edges on ERC20.transfer, got {len(transfer.calls)}: "
+        f"{[(e.kind, e.target_function_name) for e in transfer.calls]}"
+    )
+
+
+def test_safetransferlib_assembly_yul_opcodes_preserved(
+    solmate_facts: RepoFacts,
+) -> None:
+    """Stage 5 #5: Yul opcode lifting from inline assembly survives the pipeline.
+
+    SafeTransferLib.safeTransferFrom is a pure-assembly library function;
+    Slither lifts each Yul opcode (mstore, mload, gas, call, returndatasize,
+    ...) as a SolidityCall IR op, which we map to kind="solidity".
+    """
+    stl = _contract_by_name(solmate_facts, "SafeTransferLib")
+    fn = _function_by_full_name(stl, "safeTransferFrom(ERC20,address,address,uint256)")
+    solidity_edges = [e for e in fn.calls if e.kind == "solidity"]
+    assert len(solidity_edges) >= 2, (
+        f"expected multiple solidity-kind edges from inline assembly, got "
+        f"{len(solidity_edges)}; full edge list: "
+        f"{[(e.kind, e.target_function_name) for e in fn.calls]}"
+    )
+
+
+def test_owned_modifier_only_owner_extracted(solmate_facts: RepoFacts) -> None:
+    """Stage 5 #6: modifier extraction yields onlyOwner on Owned.
+
+    Modifiers are a separate code path from regular functions in Slither.
+    """
+    owned = _contract_by_name(solmate_facts, "Owned")
+    modifier_names = [m.name for m in owned.modifiers]
+    assert (
+        "onlyOwner" in modifier_names
+    ), f"expected onlyOwner modifier on Owned; declared modifiers: {modifier_names}"
+    only_owner = next(m for m in owned.modifiers if m.name == "onlyOwner")
+    assert only_owner.is_modifier is True
