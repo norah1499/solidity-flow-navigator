@@ -131,3 +131,53 @@ def test_owned_modifier_only_owner_extracted(solmate_facts: RepoFacts) -> None:
     ), f"expected onlyOwner modifier on Owned; declared modifiers: {modifier_names}"
     only_owner = next(m for m in owned.modifiers if m.name == "onlyOwner")
     assert only_owner.is_modifier is True
+
+
+def test_public_state_variable_getter_extracted(solmate_facts: RepoFacts) -> None:
+    """Synthetic getters for public state variables surface as Function records.
+
+    ERC20.balanceOf is declared as ``mapping(address => uint256) public
+    balanceOf;``. Solidity auto-generates a ``balanceOf(address)`` getter;
+    Slither resolves cross-contract calls to that synthetic function. Layer 1
+    must surface it in ``Contract.functions`` so Layer 2's lookup by
+    canonical_name finds it.
+    """
+    erc20 = _contract_by_name(solmate_facts, "ERC20")
+    getter = _function_by_full_name(erc20, "balanceOf(address)")
+    assert getter.canonical_name == "ERC20.balanceOf(address)"
+    assert getter.contract_declarer_name == "ERC20"
+    assert getter.visibility == "public"
+    assert getter.view is True
+    assert getter.is_implemented is True
+    assert getter.is_entry_point is True
+    assert getter.calls == ()
+
+
+def test_free_functions_extracted(solmate_facts: RepoFacts) -> None:
+    """Solidity top-level free functions populate RepoFacts.free_functions.
+
+    Solmate declares free functions in src/test/LibString.t.sol (testing
+    helpers) and src/utils/SignedWadMath.sol (math primitives). Both are
+    invisible to ``slither.contracts`` and must be extracted via
+    ``CompilationUnit.functions_top_level``.
+    """
+    canonical_names = {f.canonical_name for f in solmate_facts.free_functions}
+    available = sorted(canonical_names)
+    # Test-file free function (originally surfaced this gap during Layer 2 probing).
+    assert (
+        "toStringOZ(uint256)" in canonical_names
+    ), f"expected toStringOZ(uint256) in free_functions; got {available}"
+    # Source-file free function.
+    assert (
+        "wadMul(int256,int256)" in canonical_names
+    ), f"expected wadMul(int256,int256) in free_functions; got {available}"
+    # All free functions have empty contract_declarer_name and
+    # is_entry_point=False (free functions can't be invoked on a contract).
+    for f in solmate_facts.free_functions:
+        assert f.contract_declarer_name == "", (
+            f"free function {f.canonical_name!r} has non-empty declarer "
+            f"{f.contract_declarer_name!r}"
+        )
+        assert (
+            f.is_entry_point is False
+        ), f"free function {f.canonical_name!r} marked as entry point"

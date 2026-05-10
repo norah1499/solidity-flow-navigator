@@ -14,6 +14,7 @@ from slither.core.declarations import Contract as SlitherContract
 from slither.core.declarations import Function as SlitherFunction
 from slither.core.declarations import FunctionContract
 from slither.core.declarations import Modifier as SlitherModifier
+from slither.core.variables.state_variable import StateVariable
 from slither.slithir.operations import (
     HighLevelCall,
     InternalCall,
@@ -49,7 +50,12 @@ def extract_facts(
     repo_root = Path(repo_path).resolve()
     slither = Slither(crytic_compile_obj)
     contracts = tuple(_build_contract(c, repo_root) for c in slither.contracts)
-    return RepoFacts(repo_path=str(repo_root), contracts=contracts)
+    free_functions = _build_free_functions(slither, repo_root)
+    return RepoFacts(
+        repo_path=str(repo_root),
+        contracts=contracts,
+        free_functions=free_functions,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -58,9 +64,19 @@ def extract_facts(
 
 
 def _build_contract(c: SlitherContract, repo_root: Path) -> Contract:
-    functions = tuple(
+    declared = tuple(
         _build_function(f, repo_root, is_modifier=False) for f in c.functions_declared
     )
+    # Public state variables auto-generate getter functions in Solidity. Slither
+    # resolves cross-contract calls to those getters but doesn't surface them in
+    # ``functions_declared``; we synthesize Function records so they're indexable
+    # by canonical_name like any other entry point.
+    getters = tuple(
+        _build_synthetic_getter(v, c, repo_root)
+        for v in c.state_variables_declared
+        if v.visibility == "public"
+    )
+    functions = declared + getters
     modifiers = tuple(
         _build_function(m, repo_root, is_modifier=True) for m in c.modifiers_declared
     )
@@ -255,17 +271,28 @@ def _internal_edge(op: InternalCall, repo_root: Path) -> CallEdge:
 
 def _high_or_library_edge(op: HighLevelCall, repo_root: Path, *, kind: str) -> CallEdge:
     target_fn = op.function
-    target_canonical = target_fn.canonical_name if target_fn is not None else None
-    target_name = (
-        target_fn.name
-        if target_fn is not None
-        else (str(op.function_name) if op.function_name is not None else None)
-    )
-    target_contract = (
-        target_fn.contract.name
-        if isinstance(target_fn, FunctionContract) and target_fn.contract is not None
-        else None
-    )
+    if isinstance(target_fn, StateVariable):
+        # Slither models a high_level call to a public state variable as a call
+        # to the variable itself; ``StateVariable.canonical_name`` is
+        # ``"Contract.varname"`` (no parentheses). Layer 2 looks targets up by
+        # the with-signature canonical_name of the synthetic getter we emit on
+        # the same contract; build that form here so the two sides match.
+        target_canonical = f"{target_fn.contract.name}.{target_fn.full_name}"
+        target_name = target_fn.name
+        target_contract = target_fn.contract.name
+    else:
+        target_canonical = target_fn.canonical_name if target_fn is not None else None
+        target_name = (
+            target_fn.name
+            if target_fn is not None
+            else (str(op.function_name) if op.function_name is not None else None)
+        )
+        target_contract = (
+            target_fn.contract.name
+            if isinstance(target_fn, FunctionContract)
+            and target_fn.contract is not None
+            else None
+        )
     return CallEdge(
         kind=kind,
         subkind=None,
@@ -275,6 +302,74 @@ def _high_or_library_edge(op: HighLevelCall, repo_root: Path, *, kind: str) -> C
         is_resolved=target_fn is not None,
         source_location=_op_location(op, repo_root),
     )
+
+
+def _build_synthetic_getter(
+    var: StateVariable, contract: SlitherContract, repo_root: Path
+) -> Function:
+    """Build a Function record for a public state variable's auto-getter.
+
+    Mirrors what the Solidity compiler synthesizes: a public, view function
+    whose ``full_name`` encodes the getter signature derived from the
+    variable's type (e.g. ``balanceOf(address)`` for
+    ``mapping(address => uint256) public balanceOf``). Slither populates
+    ``StateVariable.full_name`` with this signature already.
+
+    Parameters and returns are left empty in v0 — Layer 2 only uses the
+    canonical_name for lookup and source_code/source_location for display.
+    Reconstructing structured Parameter records from the variable's type
+    isn't needed for the v0 use case.
+    """
+
+    declarer_name = contract.name
+    is_ep = (not contract.is_interface) and (not contract.is_library)
+    return Function(
+        canonical_name=f"{declarer_name}.{var.full_name}",
+        name=var.name,
+        full_name=var.full_name,
+        contract_declarer_name=declarer_name,
+        visibility="public",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_entry_point=is_ep,
+        payable=False,
+        view=True,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_source_location(var.source_mapping, repo_root),
+        source_code=var.source_mapping.content or "",
+        calls=(),
+    )
+
+
+def _build_free_functions(slither: Slither, repo_root: Path) -> tuple[Function, ...]:
+    """Extract Solidity top-level (file-scope) free functions.
+
+    Free functions live outside any contract; Slither places them under
+    ``CompilationUnit.functions_top_level``. They share the regular
+    ``Function`` shape — ``contract_declarer_name`` is the empty string,
+    ``is_entry_point`` is False, modifiers/visibility quirks are absent.
+
+    Dedupes across compilation units by ``canonical_name`` defensively;
+    Slither typically reports each free function once, but multiple
+    compilation units can report overlapping declarations after some
+    crytic-compile configurations.
+    """
+
+    seen: set[str] = set()
+    out: list[Function] = []
+    for cu in slither.compilation_units:
+        for f in cu.functions_top_level:
+            if f.canonical_name in seen:
+                continue
+            seen.add(f.canonical_name)
+            out.append(_build_function(f, repo_root, is_modifier=False))
+    return tuple(out)
 
 
 # ---------------------------------------------------------------------------

@@ -150,7 +150,15 @@ class Contract:
 
 @dataclass(frozen=True, slots=True)
 class RepoFacts:
-    """Top-level Layer 1 output. Everything Layer 2 needs to build Flows."""
+    """Top-level Layer 1 output. Everything Layer 2 needs to build Flows.
+
+    ``free_functions`` carries Solidity's top-level (file-scope) functions,
+    which are genuinely contract-less — Slither does not place them under
+    any Contract. Their ``Function.contract_declarer_name`` is the empty
+    string. Layer 2 needs them to resolve internal call edges whose
+    ``target_canonical_name`` lacks a contract prefix.
+    """
 
     repo_path: str  # absolute path to the analyzed repo root
     contracts: tuple[Contract, ...]
+    free_functions: tuple[Function, ...]  # Solidity top-level functions
