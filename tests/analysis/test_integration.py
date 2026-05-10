@@ -1,31 +1,18 @@
 """Layer 1 integration test: full pipeline against ../test-repos/solmate.
 
 Compiles Solmate via crytic-compile, runs the Slither fact extractor, and
-asserts on the resulting RepoFacts tree. The session-scoped fixture compiles +
-extracts once; the assertions share that result.
+asserts on the resulting RepoFacts tree. The session-scoped fixture
+``solmate_facts`` lives in ``tests/conftest.py`` so both Layer 1 and
+Layer 2 tests share one forge build per pytest session.
 
-If the sibling test-repos/solmate directory is not present (e.g. a fresh clone
-of just this project), the whole module is skipped.
+If the sibling test-repos/solmate directory is not present (e.g. a fresh
+clone of just this project), the fixture skips and the whole module is
+skipped with it.
 """
 
 from pathlib import Path
 
-import pytest
-
-from solidity_flow_navigator.analysis.compile import compile_repo
-from solidity_flow_navigator.analysis.slither_facts import extract_facts
 from solidity_flow_navigator.analysis.types import Contract, Function, RepoFacts
-
-# Two levels up from this file is the project root; its sibling holds test-repos.
-SOLMATE_PATH = Path(__file__).resolve().parents[2].parent / "test-repos" / "solmate"
-
-
-@pytest.fixture(scope="session")
-def solmate_facts() -> RepoFacts:
-    if not SOLMATE_PATH.is_dir():
-        pytest.skip(f"Solmate test repo not present at {SOLMATE_PATH}")
-    cc = compile_repo(SOLMATE_PATH)
-    return extract_facts(cc, SOLMATE_PATH)
 
 
 def _contract_by_name(facts: RepoFacts, name: str) -> Contract:
@@ -49,7 +36,8 @@ def _function_by_full_name(contract: Contract, full_name: str) -> Function:
 def test_compile_and_extract_succeed(solmate_facts: RepoFacts) -> None:
     """Stage 5 #1: end-to-end pipeline runs without raising."""
     assert isinstance(solmate_facts, RepoFacts)
-    assert solmate_facts.repo_path == str(SOLMATE_PATH.resolve())
+    assert solmate_facts.repo_path
+    assert Path(solmate_facts.repo_path).is_dir()
     assert len(solmate_facts.contracts) > 0
 
 
