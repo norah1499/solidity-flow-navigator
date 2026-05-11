@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Index — Solidity Flow Navigator{% endblock %}
+{% block body_class %}index-page{% endblock %}
+
+{% block content %}
+<section class="index-summary">
+  <p>
+    <span class="count">{{ total_entry_points }}</span> entry point{{ "s" if total_entry_points != 1 else "" }}
+    across <span class="count">{{ total_contracts }}</span> contract{{ "s" if total_contracts != 1 else "" }}.
+  </p>
+</section>
+
+{% for group in groups %}
+  {% if group.contracts %}
+  <section class="index-group">
+    <h2 class="group-heading">{{ group.label }}</h2>
+    {% for contract in group.contracts %}
+    <article class="contract-block">
+      <h3 class="contract-name">
+        {{ contract.name }}
+        <span class="contract-path">{{ contract.source_path }}</span>
+      </h3>
+      <ul class="entry-list">
+        {% for ep in contract.entry_points %}
+        <li>
+          <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
+            <code>{{ ep.contract_name }}.{{ ep.function_full_name }}</code>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </article>
+    {% endfor %}
+  </section>
+  {% endif %}
+{% endfor %}
+{% endblock %}

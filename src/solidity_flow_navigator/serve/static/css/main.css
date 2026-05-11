@@ -1,0 +1,431 @@
+/* ==========================================================================
+   Solidity Flow Navigator — main stylesheet.
+   Palette is defined as CSS custom properties at :root so the visual language
+   can be tuned in one place. Dark mode flips the palette via prefers-color-scheme.
+   ========================================================================== */
+
+:root {
+  /* Page chrome */
+  --bg-page: #f7f5ee;
+  --bg-surface: #fdfcf7;
+  --fg-text: #2c2c2c;
+  --fg-muted: #5f5e5a;
+  --border-strong: #2c2c2c;
+  --border-soft: #d0cdc1;
+
+  /* FunctionNode (regular) */
+  --node-fn-bg: #fdfcf7;
+  --node-fn-border: #2c2c2c;
+
+  /* FunctionNode (modifier) */
+  --node-mod-bg: #e8f0fa;
+  --node-mod-border: #3a6db0;
+
+  /* UnresolvedNode */
+  --node-unresolved-bg: #fbe8e8;
+  --node-unresolved-border: #a13a3a;
+
+  /* ExternalNode */
+  --node-external-bg: #f5f5f3;
+  --node-external-border: #888888;
+
+  /* Edges */
+  --edge-color: #888888;
+
+  /* Pygments token colors (light mode) */
+  --tok-keyword: #0c447c;
+  --tok-name: #534ab7;
+  --tok-string: #173404;
+  --tok-number: #993c1d;
+  --tok-comment: #5f5e5a;
+
+  /* Typography */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-page: #161614;
+    --bg-surface: #1d1d1b;
+    --fg-text: #e8e6dc;
+    --fg-muted: #9f9d92;
+    --border-strong: #c2c0b6;
+    --border-soft: #3a3a36;
+
+    --node-fn-bg: #1d1d1b;
+    --node-fn-border: #c2c0b6;
+
+    --node-mod-bg: #1a2433;
+    --node-mod-border: #6b94c8;
+
+    --node-unresolved-bg: #2e1818;
+    --node-unresolved-border: #c97070;
+
+    --node-external-bg: #232321;
+    --node-external-border: #888888;
+
+    --edge-color: #6f6f6f;
+
+    --tok-keyword: #7fb3eb;
+    --tok-name: #b5b1ff;
+    --tok-string: #a8d18c;
+    --tok-number: #d8a081;
+    --tok-comment: #8a897f;
+  }
+}
+
+/* ----- reset / base ------------------------------------------------------- */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-page);
+  color: var(--fg-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+a { color: inherit; }
+code, pre { font-family: var(--font-mono); }
+
+/* ----- site chrome -------------------------------------------------------- */
+
+.site-header {
+  display: flex;
+  align-items: baseline;
+  gap: 1.5rem;
+  padding: 1rem 2rem;
+  border-bottom: 0.5px solid var(--border-soft);
+  background: var(--bg-surface);
+}
+
+.site-title {
+  font-weight: 500;
+  font-size: 14px;
+  text-decoration: none;
+  color: var(--fg-text);
+}
+
+.site-repo {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.site-main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+/* ----- index page --------------------------------------------------------- */
+
+.index-summary {
+  margin: 0 0 2rem;
+  color: var(--fg-muted);
+}
+
+.index-summary .count {
+  font-family: var(--font-mono);
+  color: var(--fg-text);
+}
+
+.index-group {
+  margin: 0 0 3rem;
+}
+
+.group-heading {
+  font-size: 18px;
+  font-weight: 500;
+  margin: 0 0 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 0.5px solid var(--border-soft);
+}
+
+.contract-block {
+  margin: 0 0 1.75rem;
+}
+
+.contract-name {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0 0 0.5rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.contract-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-weight: 400;
+}
+
+.entry-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 1rem;
+}
+
+.entry-list li { margin: 0.2rem 0; }
+
+.entry-link {
+  text-decoration: none;
+  color: var(--fg-text);
+}
+
+.entry-link code {
+  font-size: 12px;
+}
+
+.entry-link:hover code,
+.entry-link:focus code {
+  text-decoration: underline;
+}
+
+/* ----- flow page (Stage 1 placeholder) ----------------------------------- */
+
+.flow-nav { margin-bottom: 1rem; }
+.back-link {
+  font-size: 12px;
+  color: var(--fg-muted);
+  text-decoration: none;
+}
+.back-link:hover { color: var(--fg-text); }
+
+.flow-header { margin: 0 0 1.5rem; }
+.flow-title {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0;
+}
+.flow-title code { font-size: 14px; }
+
+.flow-subtitle {
+  margin: 0.25rem 0 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.flow-subtitle code { font-size: 11px; }
+
+/* ----- graph frame (dagre layout + d3-zoom pan/zoom) -------------------- */
+
+.site-main:has(#graph-frame) { max-width: none; padding: 0; }
+
+#graph-frame {
+  position: relative;
+  width: 100vw;
+  /* Top chrome (header + flow-header + back-link + margins) is roughly
+     150px on a default viewport; reserve everything below it. */
+  height: calc(100vh - 150px);
+  overflow: hidden;
+  background: var(--bg-page);
+  border-top: 0.5px solid var(--border-soft);
+  border-bottom: 0.5px solid var(--border-soft);
+  cursor: grab;
+  outline: none;
+}
+#graph-frame:active { cursor: grabbing; }
+
+#graph {
+  position: relative;
+  transform-origin: 0 0;
+  /* Hidden during measurement; flow.js sets data-state="ready" once nodes
+     are positioned, edges drawn, and the initial fit transform applied. */
+}
+#graph[data-state="measuring"] { visibility: hidden; }
+
+#edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+#edges .edge {
+  fill: none;
+  stroke: var(--edge-color);
+  stroke-width: 1px;
+}
+#edges marker path { fill: var(--edge-color); }
+
+#nodes { position: absolute; top: 0; left: 0; }
+#nodes .node { position: absolute; }
+
+#reset-view {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  padding: 0.35rem 0.6rem;
+  background: var(--bg-surface);
+  color: var(--fg-text);
+  border: 0.5px solid var(--border-soft);
+  border-radius: 2px;
+  cursor: pointer;
+}
+#reset-view:hover { border-color: var(--border-strong); }
+
+/* ----- nodes (used by both the graph and any static fallback) ---------- */
+
+.node {
+  border: 0.5px solid var(--border-strong);
+  background: var(--bg-surface);
+  padding: 0.75rem 1rem;
+  max-width: 60rem;
+}
+
+.node--function {
+  border-color: var(--node-fn-border);
+  background: var(--node-fn-bg);
+}
+
+.node--modifier {
+  border-color: var(--node-mod-border);
+  background: var(--node-mod-bg);
+}
+
+.node--unresolved {
+  border-color: var(--node-unresolved-border);
+  background: var(--node-unresolved-bg);
+}
+
+.node--external {
+  border-color: var(--node-external-border);
+  background: var(--node-external-bg);
+  border-style: dashed;
+}
+
+.node-head {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.node-title {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.node-title code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.node-badges {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0.1rem 0.4rem;
+  border-radius: 2px;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+.badge-modifier {
+  background: var(--node-mod-border);
+  color: #fff;
+}
+.badge-super,
+.badge-inherited {
+  background: transparent;
+  color: var(--fg-muted);
+  border: 0.5px solid var(--border-soft);
+}
+.badge-unresolved {
+  background: var(--node-unresolved-border);
+  color: #fff;
+}
+.badge-external {
+  background: transparent;
+  color: var(--fg-muted);
+  border: 0.5px dashed var(--node-external-border);
+}
+
+.node-body.src {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+  overflow-x: auto;
+  background: transparent;
+}
+
+.node-builtins {
+  margin-top: 0.5rem;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.node-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.node-path { font-family: var(--font-mono); font-size: 11px; }
+
+/* ----- Pygments token overrides ----------------------------------------- */
+/* Sit on top of pygments.css; selectors share specificity (.src .x), so
+   load order in base.html (pygments first, main second) decides the winner. */
+
+.src .k,
+.src .kd,
+.src .kn,
+.src .kr,
+.src .kt { color: var(--tok-keyword); }
+
+.src .n,
+.src .na,
+.src .nf,
+.src .nv,
+.src .nx,
+.src .nc,
+.src .nb,
+.src .ni { color: var(--tok-name); }
+
+.src .s,
+.src .s1,
+.src .s2,
+.src .sb,
+.src .sc,
+.src .sd,
+.src .se,
+.src .sh,
+.src .si,
+.src .sx,
+.src .sr,
+.src .ss { color: var(--tok-string); }
+
+.src .m,
+.src .mb,
+.src .mf,
+.src .mh,
+.src .mi,
+.src .mo { color: var(--tok-number); }
+
+.src .c,
+.src .c1,
+.src .cm,
+.src .cp,
+.src .cpf,
+.src .cs { color: var(--tok-comment); font-style: italic; }
+
+.src .o,
+.src .p { color: var(--fg-text); }

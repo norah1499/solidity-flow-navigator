@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Solidity Flow Navigator{% endblock %}</title>
+  {# head_extra renders before main.css so per-page sheets (e.g. pygments)
+     act as a base palette that main.css can override. #}
+  {% block head_extra %}{% endblock %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <header class="site-header">
+    <a class="site-title" href="{{ url_for('index') }}">Solidity Flow Navigator</a>
+    <span class="site-repo">{{ repo_path }}</span>
+  </header>
+  <main class="site-main">
+    {% block content %}{% endblock %}
+  </main>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

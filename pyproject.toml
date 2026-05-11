@@ -44,7 +44,10 @@ solflow = "solidity_flow_navigator.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-solidity_flow_navigator = ["serve/static/**/*"]
+solidity_flow_navigator = [
+    "serve/static/**/*",
+    "serve/templates/**/*",
+]
 
 [tool.black]
 line-length = 88
@@ -67,9 +70,6 @@ select = ["E", "F", "I", "B", "UP"]
 "src/solidity_flow_navigator/flow/builder.py" = ["E501"]
 "src/solidity_flow_navigator/flow/scope.py" = ["E501"]
 "src/solidity_flow_navigator/flow/types.py" = ["E501"]
-"src/solidity_flow_navigator/serve/app.py" = ["E501"]
-"src/solidity_flow_navigator/serve/highlight.py" = ["E501"]
-"src/solidity_flow_navigator/serve/serializer.py" = ["E501"]
 "tests/flow/test_builder.py" = ["E501"]
 "tests/flow/test_scope.py" = ["E501"]
 
