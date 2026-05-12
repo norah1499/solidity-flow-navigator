@@ -103,10 +103,18 @@ def test_unresolved_node_round_trips(solmate_flows: tuple[Flow, ...]) -> None:
     assert "source_html" not in u  # only FunctionNodes get a body
 
 
-def test_external_node_round_trips(solmate_flows: tuple[Flow, ...]) -> None:
-    """An AuthTest entry point reaches DSTest.assertEq under lib/ds-test/."""
+def test_external_node_round_trips(
+    solmate_flows_unfiltered: tuple[Flow, ...],
+) -> None:
+    """An AuthTest entry point reaches DSTest.assertEq under lib/ds-test/.
+
+    Uses the unfiltered fixture because ``AuthTest`` lives under
+    ``src/test/`` and is dropped by the default scope's ``**/test/**``
+    rule. The serializer behavior under test (round-tripping ExternalNode
+    at the lib/ boundary) is identical regardless of scope.
+    """
     flow = _flow_by_canonical_and_contract(
-        solmate_flows, "AuthTest.testTransferOwnershipAsOwner()", "AuthTest"
+        solmate_flows_unfiltered, "AuthTest.testTransferOwnershipAsOwner()", "AuthTest"
     )
     d = serialize_flow(flow)
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solidity-flow-navigator"
-version = "0.0.1"
+version = "0.1.0"
 description = "Per-entry-point navigable call-graph visualizations of Solidity repositories, for Web3 security auditors."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,6 +28,7 @@ dependencies = [
     "slither-analyzer>=0.11.5,<0.12",
     "Flask>=3.0,<4.0",
     "Pygments>=2.17,<3.0",
+    "pathspec==1.1.1",
 ]
 
 [project.optional-dependencies]

@@ -54,7 +54,7 @@ def test_owned_transferownership_first_child_is_only_owner_modifier(
 
 
 def test_modifier_does_not_consume_body_calls(
-    solmate_flows: tuple[Flow, ...],
+    solmate_flows_unfiltered: tuple[Flow, ...],
 ) -> None:
     """Find a Flow whose root has BOTH modifier children AND body children.
     Verify the body children survive (i.e. the modifier-dedup didn't eat
@@ -64,10 +64,14 @@ def test_modifier_does_not_consume_body_calls(
     The test discovers a candidate dynamically — if Solmate is later refactored
     such that no entry point has both shapes, the assertion fires loudly so
     the regression guard's preconditions are checked.
+
+    Uses the unfiltered fixture because the modifier+body combinations
+    Solmate ships live exclusively in test contracts under ``src/test/**``;
+    the default scope removes all of them and starves the discovery loop.
     """
 
     candidates = []
-    for f in solmate_flows:
+    for f in solmate_flows_unfiltered:
         children = f.root.children
         if not children:
             continue

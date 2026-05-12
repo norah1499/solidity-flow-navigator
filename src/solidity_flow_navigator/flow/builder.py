@@ -20,7 +20,7 @@ from solidity_flow_navigator.analysis.types import (
 )
 
 from .modifiers import resolve_modifier
-from .scope import Scope
+from .scope import Scope, contract_excluded, library_inlined, path_excluded
 from .types import (
     ExternalNode,
     Flow,
@@ -70,8 +70,13 @@ def _is_external_path(filename_relative: str) -> bool:
 def build_flows(facts: RepoFacts, scope: Scope) -> tuple[Flow, ...]:
     """Build one Flow per entry point in ``facts``, applying ``scope`` rules.
 
-    In v0 ``scope`` is always ``DEFAULT_SCOPE`` (empty). v0.1 will read
-    user-supplied include/exclude rules and interface bindings from it.
+    Scope rules (spec §11.4) apply at the outer Contract enumeration: an
+    invoker contract whose source path matches ``scope.exclude_paths`` or
+    whose name matches ``scope.exclude_contracts`` produces no Flows. The
+    filter does NOT propagate into the base-walk inside ``entry_points_for``:
+    an in-scope contract that inherits from a filtered base still surfaces
+    the inherited entry points (the spec's "the contract" in §11.4 refers
+    to the invoker, not the declarer).
     """
 
     builder = _FlowBuilder(facts, scope)
@@ -79,6 +84,10 @@ def build_flows(facts: RepoFacts, scope: Scope) -> tuple[Flow, ...]:
     for contract in facts.contracts:
         if contract.kind != "contract":
             continue  # interfaces and libraries don't produce entry points (§11.4)
+        if path_excluded(scope, contract.source_location.filename_relative):
+            continue
+        if contract_excluded(scope, contract.name):
+            continue
         for entry_func in builder.entry_points_for(contract):
             flows.append(builder.build_flow(entry_func, invoked_via=contract.name))
     return tuple(flows)
@@ -428,10 +437,17 @@ class _FlowBuilder:
 
         # Free functions terminate as ExternalNode regardless of source path
         # (v0 simplification — they're navigable in source but their bodies
-        # don't expand into the call tree).
+        # don't expand into the call tree). Library paths under lib/{name}/...
+        # also terminate as ExternalNode unless ``scope.inline_libraries``
+        # names {name}, in which case Layer 2 recurses (§11.2 / §11.8). Free
+        # functions are NOT covered by inline_libraries — that mechanism
+        # targets package-name-keyed library directories, not standalone
+        # top-level functions, per §11.10's v0 simplification.
+        target_path = target.source_location.filename_relative
         is_free_function = target.contract_declarer_name == ""
-        if is_free_function or _is_external_path(
-            target.source_location.filename_relative
+        if is_free_function or (
+            _is_external_path(target_path)
+            and not library_inlined(self.scope, target_path)
         ):
             return self._external_node(target, edge)
 
@@ -476,7 +492,10 @@ class _FlowBuilder:
                 raw_kind=edge.kind,
                 raw_subkind=edge.subkind,
             )
-        if _is_external_path(target.source_location.filename_relative):
+        target_path = target.source_location.filename_relative
+        if _is_external_path(target_path) and not library_inlined(
+            self.scope, target_path
+        ):
             return self._external_node(target, edge)
         # High-level cross-contract call: invoked_via is the target's own
         # contract; propagation of the entry-point context stops at the

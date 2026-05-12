@@ -19,7 +19,7 @@ from solidity_flow_navigator.analysis.compile import compile_repo
 from solidity_flow_navigator.analysis.slither_facts import extract_facts
 from solidity_flow_navigator.analysis.types import RepoFacts
 from solidity_flow_navigator.flow.builder import build_flows
-from solidity_flow_navigator.flow.scope import DEFAULT_SCOPE
+from solidity_flow_navigator.flow.scope import DEFAULT_SCOPE, Scope
 from solidity_flow_navigator.flow.types import Flow
 
 
@@ -59,6 +59,26 @@ def solmate_facts() -> RepoFacts:
 
 @pytest.fixture(scope="session")
 def solmate_flows(solmate_facts: RepoFacts) -> tuple[Flow, ...]:
-    """Build one Flow per entry point on the Solmate facts."""
+    """Build one Flow per entry point on the Solmate facts under DEFAULT_SCOPE.
+
+    This is the production-behavior fixture: v0.1's default scope filters
+    out ``Mock*`` contracts and anything under ``src/test/**``, so any test
+    asserting on those names belongs on ``solmate_flows_unfiltered``
+    instead.
+    """
 
     return build_flows(solmate_facts, DEFAULT_SCOPE)
+
+
+@pytest.fixture(scope="session")
+def solmate_flows_unfiltered(solmate_facts: RepoFacts) -> tuple[Flow, ...]:
+    """Build flows on the Solmate facts with NO scope filtering applied.
+
+    Used by tests whose subject is content the default scope excludes —
+    Mock contracts (``MockERC20``, ``MockOwned``, ...), helpers under
+    ``src/test/**``, and the lib/ts-test reach that test contracts produce.
+    Equivalent to running ``solflow --no-default-excludes`` with no config
+    file.
+    """
+
+    return build_flows(solmate_facts, Scope())

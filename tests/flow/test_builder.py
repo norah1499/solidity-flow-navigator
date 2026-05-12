@@ -135,15 +135,20 @@ def test_entry_points_include_regular_and_synthetic_getters(
 
 
 def test_inheritance_metadata_on_inherited_entry_points(
-    solmate_flows: tuple[Flow, ...],
+    solmate_flows_unfiltered: tuple[Flow, ...],
 ) -> None:
-    """MockERC20 inherits from ERC20; declarer/invoked_via diverge correctly."""
+    """MockERC20 inherits from ERC20; declarer/invoked_via diverge correctly.
+
+    Uses the unfiltered fixture because the default scope filters ``Mock*``
+    contracts, and the inheritance-metadata behavior under test is most
+    naturally illustrated by a Mock that thinly extends ERC20.
+    """
 
     for full_name in (
         "transfer(address,uint256)",
         "approve(address,uint256)",
     ):
-        flow = _flow_by_entry_point(solmate_flows, "MockERC20", full_name)
+        flow = _flow_by_entry_point(solmate_flows_unfiltered, "MockERC20", full_name)
         assert flow.entry_point_contract_name == "MockERC20"
         assert flow.root.declarer_contract_name == "ERC20", (
             f"MockERC20.{full_name}: expected declarer=ERC20, "
@@ -155,7 +160,9 @@ def test_inheritance_metadata_on_inherited_entry_points(
         )
 
     # MockERC20.mint is declared on MockERC20 itself, not inherited.
-    mint = _flow_by_entry_point(solmate_flows, "MockERC20", "mint(address,uint256)")
+    mint = _flow_by_entry_point(
+        solmate_flows_unfiltered, "MockERC20", "mint(address,uint256)"
+    )
     assert mint.root.declarer_contract_name == "MockERC20"
     assert mint.root.invoked_via_contract_name == "MockERC20"
 
@@ -182,15 +189,20 @@ def test_empty_children_case_for_transferfrom(
 # ---------------------------------------------------------------------------
 
 
-def test_external_node_lib_path_present(solmate_flows: tuple[Flow, ...]) -> None:
+def test_external_node_lib_path_present(
+    solmate_flows_unfiltered: tuple[Flow, ...],
+) -> None:
     """Some Flow contains an ExternalNode whose source_path starts with lib/.
 
     Solmate's test contracts inherit from ds-test (under lib/ds-test/),
-    producing ExternalNode children at the lib/ boundary.
+    producing ExternalNode children at the lib/ boundary. Uses the
+    unfiltered fixture because the test-contract path that reaches lib/
+    is excluded by default scope's ``**/test/**`` rule; the lib/ boundary
+    behavior under test is the same in both configurations.
     """
 
     found: tuple[Flow, ExternalNode] | None = None
-    for flow in solmate_flows:
+    for flow in solmate_flows_unfiltered:
         for node in _walk(flow.root):
             if isinstance(node, ExternalNode) and node.source_path.startswith("lib/"):
                 found = (flow, node)
@@ -205,17 +217,19 @@ def test_external_node_lib_path_present(solmate_flows: tuple[Flow, ...]) -> None
 
 
 def test_external_node_free_function_present(
-    solmate_flows: tuple[Flow, ...],
+    solmate_flows_unfiltered: tuple[Flow, ...],
 ) -> None:
     """Some Flow contains an ExternalNode for a top-level free function.
 
     Free functions terminate as ExternalNode regardless of source path
     (per the §11.10 v0 simplification). Their target_contract_name is None
-    and target_canonical_name has no contract prefix.
+    and target_canonical_name has no contract prefix. Uses the unfiltered
+    fixture because Solmate's free-function call sites are all reachable
+    only through test contracts under ``src/test/**``.
     """
 
     found: tuple[Flow, ExternalNode] | None = None
-    for flow in solmate_flows:
+    for flow in solmate_flows_unfiltered:
         for node in _walk(flow.root):
             if isinstance(node, ExternalNode) and node.target_contract_name is None:
                 found = (flow, node)
@@ -271,16 +285,19 @@ def test_unresolved_yul_dynamic_dispatch_present(
 
 
 def test_unresolved_low_level_call_present(
-    solmate_flows: tuple[Flow, ...],
+    solmate_flows_unfiltered: tuple[Flow, ...],
 ) -> None:
     """Some Flow somewhere contains a LOW_LEVEL_CALL unresolved node.
 
     Stage 2's aggregate showed 37 of these in Solmate (e.g. DSTest.failed
-    using HEVM_ADDRESS.call to load cheatcode state).
+    using HEVM_ADDRESS.call to load cheatcode state). Uses the unfiltered
+    fixture because the reachable LOW_LEVEL_CALL sites in Solmate live in
+    DSTest under lib/ and reach the call tree only via test contracts under
+    ``src/test/**`` — both filtered out by default scope.
     """
 
     found: tuple[Flow, UnresolvedNode] | None = None
-    for flow in solmate_flows:
+    for flow in solmate_flows_unfiltered:
         for node in _walk(flow.root):
             if (
                 isinstance(node, UnresolvedNode)
@@ -417,6 +434,7 @@ def test_entry_point_invoker_canonical_name_unique_across_flows(
 
 def test_non_inherited_entry_point_declarer_equals_invoker(
     solmate_flows: tuple[Flow, ...],
+    solmate_flows_unfiltered: tuple[Flow, ...],
 ) -> None:
     """For an entry point declared on its own invoking contract (no
     inheritance), the declarer and invoker canonical_names coincide.
@@ -426,9 +444,15 @@ def test_non_inherited_entry_point_declarer_equals_invoker(
     flow invoked through ``Owned`` is similarly non-inherited from Owned's
     own perspective — only its MockOwned sibling carries an inheritance
     delta.
+
+    The MockERC20 case uses the unfiltered fixture (the default scope
+    filters ``Mock*``); Owned uses the default fixture, since it's a
+    production contract that survives the default filter.
     """
 
-    mint = _flow_by_entry_point(solmate_flows, "MockERC20", "mint(address,uint256)")
+    mint = _flow_by_entry_point(
+        solmate_flows_unfiltered, "MockERC20", "mint(address,uint256)"
+    )
     assert mint.entry_point_declarer_canonical_name == "MockERC20.mint(address,uint256)"
     assert (
         mint.entry_point_declarer_canonical_name
@@ -443,3 +467,301 @@ def test_non_inherited_entry_point_declarer_equals_invoker(
         owned.entry_point_declarer_canonical_name
         == owned.entry_point_invoker_canonical_name
     )
+
+
+# ---------------------------------------------------------------------------
+# 11. v0.1 scope-rule application (spec §11.2 / §11.4 / §11.8)
+# ---------------------------------------------------------------------------
+
+
+def test_default_scope_excludes_mock_contracts(
+    solmate_flows: tuple[Flow, ...],
+    solmate_flows_unfiltered: tuple[Flow, ...],
+) -> None:
+    """No Mock* contract appears as an invoker in the default-scope output;
+    the unfiltered fixture has them, so the difference is the filter's
+    effect (not Solmate happening to lack them)."""
+
+    default_invokers = {f.entry_point_contract_name for f in solmate_flows}
+    unfiltered_invokers = {
+        f.entry_point_contract_name for f in solmate_flows_unfiltered
+    }
+
+    default_mocks = {n for n in default_invokers if n.startswith("Mock")}
+    unfiltered_mocks = {n for n in unfiltered_invokers if n.startswith("Mock")}
+
+    assert (
+        default_mocks == set()
+    ), f"default scope leaked Mock* contracts: {sorted(default_mocks)}"
+    assert unfiltered_mocks, (
+        "unfiltered fixture has no Mock* contracts; the test's premise (that "
+        "Mocks exist in Solmate) is broken"
+    )
+
+
+def test_default_scope_excludes_test_paths(
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """No Flow under default scope has a root whose source path matches any
+    of the default ``**/test/**`` / ``**/tests/**`` / ``**/*.t.sol`` rules.
+
+    Asserted on the FlowNode-side (root.source_location) rather than the
+    contract-side, because the builder's filter applies pre-Flow but the
+    invariant we care about is downstream: nothing the auditor sees in the
+    rendered output lives in a test directory.
+    """
+
+    leaked = [
+        f.entry_point_contract_name
+        for f in solmate_flows
+        if "/test/" in f.root.source_location.filename_relative
+        or "/tests/" in f.root.source_location.filename_relative
+        or f.root.source_location.filename_relative.endswith(".t.sol")
+    ]
+    assert (
+        leaked == []
+    ), f"default scope leaked entry points from test paths: {sorted(set(leaked))}"
+
+
+def test_default_scope_keeps_production_contracts(
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Production contracts survive the default filter — regression guard
+    against an over-broad glob that would accidentally drop real code.
+
+    The required list deliberately omits libraries (``SafeTransferLib``,
+    ``MerkleProofLib``, ...) — libraries don't produce entry points per
+    §11.4's last paragraph, so they never appear as invokers regardless
+    of scope.
+    """
+
+    invokers = {f.entry_point_contract_name for f in solmate_flows}
+    for required in ("ERC20", "ERC4626", "Owned", "WETH", "Auth"):
+        assert required in invokers, (
+            f"production contract {required} missing from default-scope flows; "
+            f"sample invokers: {sorted(invokers)[:20]}"
+        )
+
+
+def test_inline_libraries_recurses_into_lib_path(
+    solmate_facts,
+) -> None:
+    """With ``inline_libraries=("ds-test",)``, calls into lib/ds-test/ recurse
+    as FunctionNodes instead of stubbing as ExternalNode.
+
+    Builds a one-off Layer 2 pass (no session fixture) because this scope is
+    specific to one test. The mechanism under test: ``library_inlined``
+    short-circuits ``_is_external_path`` in builder.py.
+
+    Concretely, AuthTest.testTransferOwnershipAsOwner under unfiltered scope
+    reaches DSTest.assertEq via an ExternalNode (covered by other tests).
+    Under inline_libraries=("ds-test",), the same call site recurses into
+    DSTest's body.
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    flows = build_flows(solmate_facts, Scope(inline_libraries=("ds-test",)))
+    # Must use unfiltered-equivalent inputs to reach the test-contract path:
+    # default-scope filtering of test contracts is orthogonal to inline_libraries.
+    # Scope() with only inline_libraries set leaves exclude_paths/contracts empty.
+
+    flow = _flow_by_entry_point(flows, "AuthTest", "testTransferOwnershipAsOwner()")
+
+    # Walk the tree: any FunctionNode whose source_location is under
+    # lib/ds-test/ proves recursion happened. Without inline_libraries this
+    # would only appear as an ExternalNode.
+    recursed: FunctionNode | None = None
+    for node in _walk(flow.root):
+        if isinstance(
+            node, FunctionNode
+        ) and node.source_location.filename_relative.startswith("lib/ds-test/"):
+            recursed = node
+            break
+
+    assert recursed is not None, (
+        "inline_libraries=('ds-test',) did not cause recursion into lib/ds-test/; "
+        "no FunctionNode with source under lib/ds-test/ found in AuthTest flow"
+    )
+    # Sanity: the recursed node carries a real declarer name (not the empty
+    # string a free-function stub would have).
+    assert recursed.declarer_contract_name
+
+
+# ---------------------------------------------------------------------------
+# 12. Synthetic inline_libraries test — controlled facts, isolates the
+# external-vs-recurse decision without Solmate coupling.
+# ---------------------------------------------------------------------------
+
+
+def _sl(filename_relative: str):
+    """Build a minimal SourceLocation for synthetic facts."""
+
+    from solidity_flow_navigator.analysis.types import SourceLocation
+
+    return SourceLocation(
+        filename_absolute="/abs/" + filename_relative,
+        filename_relative=filename_relative,
+        start=0,
+        length=1,
+        lines=(1,),
+        starting_column=1,
+        ending_column=2,
+    )
+
+
+def _synthetic_facts_with_lib_call():
+    """Build a tiny RepoFacts: one in-scope contract `App` calling
+    `Lib.helper()` declared under `lib/widget/Lib.sol`.
+
+    Returns the RepoFacts. `App.entry()` is the entry point; under default
+    behavior it stubs Lib.helper as ExternalNode, under
+    `inline_libraries=("widget",)` it recurses.
+    """
+
+    from solidity_flow_navigator.analysis.types import (
+        CallEdge,
+        Contract,
+        Function,
+        RepoFacts,
+    )
+
+    helper = Function(
+        canonical_name="Lib.helper()",
+        name="helper",
+        full_name="helper()",
+        contract_declarer_name="Lib",
+        visibility="internal",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("lib/widget/Lib.sol"),
+        source_code="function helper() internal {}",
+        calls=(),
+    )
+
+    entry_call = CallEdge(
+        kind="library",  # using-for / Library.x() — recurses unless lib-external
+        subkind=None,
+        target_canonical_name="Lib.helper()",
+        target_function_name="helper",
+        target_contract_name="Lib",
+        is_resolved=True,
+        source_location=_sl("src/App.sol"),
+    )
+    entry = Function(
+        canonical_name="App.entry()",
+        name="entry",
+        full_name="entry()",
+        contract_declarer_name="App",
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/App.sol"),
+        source_code="function entry() external { Lib.helper(); }",
+        calls=(entry_call,),
+    )
+    app = Contract(
+        name="App",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl("src/App.sol"),
+        functions=(entry,),
+        modifiers=(),
+    )
+    lib_contract = Contract(
+        name="Lib",
+        kind="library",
+        is_interface=False,
+        is_library=True,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl("lib/widget/Lib.sol"),
+        functions=(helper,),
+        modifiers=(),
+    )
+    return RepoFacts(
+        repo_path="/abs",
+        contracts=(app, lib_contract),
+        free_functions=(),
+    )
+
+
+def test_synthetic_lib_call_stubs_as_external_without_inline() -> None:
+    """Without inline_libraries, a library under lib/ stubs as ExternalNode."""
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _synthetic_facts_with_lib_call()
+    flows = build_flows(facts, Scope())  # empty scope — no defaults either
+    assert len(flows) == 1
+    children = flows[0].root.children
+    assert len(children) == 1
+    assert isinstance(children[0], ExternalNode)
+    assert children[0].target_canonical_name == "Lib.helper()"
+    assert children[0].source_path == "lib/widget/Lib.sol"
+
+
+def test_synthetic_lib_call_recurses_with_inline_libraries() -> None:
+    """With ``inline_libraries=("widget",)``, the same lib/ call recurses
+    to a FunctionNode rather than stubbing.
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _synthetic_facts_with_lib_call()
+    flows = build_flows(facts, Scope(inline_libraries=("widget",)))
+    assert len(flows) == 1
+    children = flows[0].root.children
+    assert len(children) == 1
+    child = children[0]
+    assert isinstance(child, FunctionNode), (
+        f"expected FunctionNode (recursion), got {type(child).__name__} "
+        f"with inline_libraries=('widget',)"
+    )
+    assert child.canonical_name == "Lib.helper()"
+    assert child.source_location.filename_relative == "lib/widget/Lib.sol"
+
+
+def test_synthetic_inline_libraries_name_must_match_segment() -> None:
+    """``inline_libraries=("other",)`` does NOT inline lib/widget/* — the
+    name matches the directory segment after `lib/`, not just any prefix.
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _synthetic_facts_with_lib_call()
+    flows = build_flows(facts, Scope(inline_libraries=("other",)))
+    assert len(flows) == 1
+    child = flows[0].root.children[0]
+    assert isinstance(
+        child, ExternalNode
+    ), f"expected ExternalNode (no inlining match), got {type(child).__name__}"

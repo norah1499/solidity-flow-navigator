@@ -36,11 +36,34 @@ def client(solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...]) -> FlaskCl
     return app.test_client()
 
 
+@pytest.fixture(scope="module")
+def client_unfiltered(
+    solmate_facts: RepoFacts, solmate_flows_unfiltered: tuple[Flow, ...]
+) -> FlaskClient:
+    """Variant of ``client`` built from ``solmate_flows_unfiltered``.
+
+    Used by tests whose subject is content the default scope filters out
+    (Mock contracts, the Tests group's existence, ``src/test/**`` flows).
+    Equivalent to running ``solflow --no-default-excludes`` against the
+    test fixture.
+    """
+    app = create_app(solmate_facts, solmate_flows_unfiltered)
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
 # -- index ------------------------------------------------------------------
 
 
-def test_index_status_and_groups(client: FlaskClient) -> None:
-    rv = client.get("/")
+def test_index_status_and_groups(client_unfiltered: FlaskClient) -> None:
+    """All three group headings render when content exists in each.
+
+    Uses the unfiltered client because the ``Tests`` group is populated
+    only by ``src/test/**`` and ``Mock*`` content — both excluded by
+    default scope, which would omit the heading entirely (the index
+    template skips groups with zero contracts).
+    """
+    rv = client_unfiltered.get("/")
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
     assert ">Application<" in body
@@ -177,22 +200,26 @@ def test_flow_page_known_url_id(
 
 
 def test_flow_page_inherited_url_does_not_collide(
-    client: FlaskClient, solmate_flows: tuple[Flow, ...]
+    client_unfiltered: FlaskClient, solmate_flows_unfiltered: tuple[Flow, ...]
 ) -> None:
     """MockOwned and Owned each get their own URL: Layer 2's
     ``entry_point_invoker_canonical_name`` is keyed on the invoking contract,
     so the two flows carry distinct canonicals
     (``MockOwned.transferOwnership(...)`` vs ``Owned.transferOwnership(...)``)
-    and route independently."""
+    and route independently.
+
+    Uses the unfiltered fixture pair because ``MockOwned`` is filtered by
+    default scope's ``Mock*`` rule.
+    """
     bare = next(
         f
-        for f in solmate_flows
+        for f in solmate_flows_unfiltered
         if f.entry_point_contract_name == "Owned"
         and f.entry_point_function_name == "transferOwnership"
     )
     inherited = next(
         f
-        for f in solmate_flows
+        for f in solmate_flows_unfiltered
         if f.entry_point_contract_name == "MockOwned"
         and f.entry_point_function_name == "transferOwnership"
     )
@@ -200,8 +227,10 @@ def test_flow_page_inherited_url_does_not_collide(
         bare.entry_point_invoker_canonical_name
         != inherited.entry_point_invoker_canonical_name
     )
-    bare_rv = client.get(f"/flow/{bare.entry_point_invoker_canonical_name}")
-    inh_rv = client.get(f"/flow/{inherited.entry_point_invoker_canonical_name}")
+    bare_rv = client_unfiltered.get(f"/flow/{bare.entry_point_invoker_canonical_name}")
+    inh_rv = client_unfiltered.get(
+        f"/flow/{inherited.entry_point_invoker_canonical_name}"
+    )
     assert bare_rv.status_code == 200
     assert inh_rv.status_code == 200
     # The inherited flow's page header carries the subtitle.
@@ -225,7 +254,7 @@ def _undefang(s: str) -> str:
 
 
 def test_flow_page_routes_colliding_canonicals_distinctly(
-    client: FlaskClient,
+    client_unfiltered: FlaskClient,
 ) -> None:
     """Regression: previously-colliding ``Owned.transferOwnership(address)``
     and ``MockOwned.transferOwnership(address)`` route to distinct Flows.
@@ -233,13 +262,14 @@ def test_flow_page_routes_colliding_canonicals_distinctly(
     Hits both URL-encoded paths, asserts each returns 200 with an embedded
     ``<script id="flow-data">`` block, then parses the embedded JSON from
     each and asserts the payloads differ — minimum: distinct
-    ``entry_point_contract_name``.
+    ``entry_point_contract_name``. Uses the unfiltered client because the
+    ``MockOwned`` route doesn't exist under default scope.
     """
     owned_url = urllib.parse.quote("Owned.transferOwnership(address)", safe="")
     mock_url = urllib.parse.quote("MockOwned.transferOwnership(address)", safe="")
 
-    owned_rv = client.get(f"/flow/{owned_url}")
-    mock_rv = client.get(f"/flow/{mock_url}")
+    owned_rv = client_unfiltered.get(f"/flow/{owned_url}")
+    mock_rv = client_unfiltered.get(f"/flow/{mock_url}")
     assert owned_rv.status_code == 200, f"Owned route returned {owned_rv.status_code}"
     assert mock_rv.status_code == 200, f"MockOwned route returned {mock_rv.status_code}"
 
