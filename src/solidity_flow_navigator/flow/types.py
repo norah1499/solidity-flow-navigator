@@ -106,19 +106,28 @@ FlowNode = FunctionNode | UnresolvedNode | ExternalNode
 class Flow:
     """The rendered artifact for one entry point (spec §11.3).
 
-    ``entry_point_canonical_name`` is the canonical name of the entry point
-    *as invoked* (e.g. ``MockOwned.transferOwnership(address)``). For an
-    inherited entry point this differs from ``root.canonical_name``, which
-    still holds the declarer's canonical (e.g.
-    ``Owned.transferOwnership(address)``). Unique across all Flows in a
-    given ``RepoFacts``, so it is also the URL/lookup key for Layer 3.
+    ``entry_point_invoker_canonical_name`` is the canonical name of the entry
+    point keyed on the invoking contract (e.g.
+    ``MockOwned.transferOwnership(address)``). Constructed by Layer 2 as
+    ``f"{invoker_contract.name}.{function.full_name}"``. Unique across all
+    Flows in a given ``RepoFacts`` — this is the load-bearing identifier
+    downstream layers use for routing and lookup.
+
+    ``entry_point_declarer_canonical_name`` is the canonical name of the
+    C3-resolved declarer (where the function body lives), passed through
+    from Layer 1 (e.g. ``Owned.transferOwnership(address)`` for an inherited
+    entry point). Equal across all Flows that share an inherited function,
+    so it is informational only — not unique per Flow. Equal to
+    ``entry_point_invoker_canonical_name`` when the entry point is not
+    inherited.
 
     ``entry_point_contract_name`` is the contract the entry point is invoked
     on; for an inherited entry point this differs from
     ``root.declarer_contract_name``.
     """
 
-    entry_point_canonical_name: str
+    entry_point_declarer_canonical_name: str
+    entry_point_invoker_canonical_name: str
     entry_point_contract_name: str
     entry_point_function_name: str
     root: FunctionNode

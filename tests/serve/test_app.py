@@ -16,6 +16,10 @@ by the manual §15.4 walk-through in the Stage 4 commit message.
 
 from __future__ import annotations
 
+import json
+import re
+import urllib.parse
+
 import pytest
 from flask.testing import FlaskClient
 
@@ -64,9 +68,9 @@ def test_flow_page_known_url_id(
     target = next(
         f
         for f in solmate_flows
-        if f.entry_point_canonical_name == "ERC4626.deposit(uint256,address)"
+        if f.entry_point_invoker_canonical_name == "ERC4626.deposit(uint256,address)"
     )
-    rv = client.get(f"/flow/{target.entry_point_canonical_name}")
+    rv = client.get(f"/flow/{target.entry_point_invoker_canonical_name}")
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
     # The embedded JSON the frontend reads.
@@ -83,9 +87,10 @@ def test_flow_page_inherited_url_does_not_collide(
     client: FlaskClient, solmate_flows: tuple[Flow, ...]
 ) -> None:
     """MockOwned and Owned each get their own URL: Layer 2's
-    ``entry_point_canonical_name`` is keyed on the invoking contract, so the
-    two flows carry distinct canonicals (``MockOwned.transferOwnership(...)``
-    vs ``Owned.transferOwnership(...)``) and route independently."""
+    ``entry_point_invoker_canonical_name`` is keyed on the invoking contract,
+    so the two flows carry distinct canonicals
+    (``MockOwned.transferOwnership(...)`` vs ``Owned.transferOwnership(...)``)
+    and route independently."""
     bare = next(
         f
         for f in solmate_flows
@@ -98,14 +103,68 @@ def test_flow_page_inherited_url_does_not_collide(
         if f.entry_point_contract_name == "MockOwned"
         and f.entry_point_function_name == "transferOwnership"
     )
-    assert bare.entry_point_canonical_name != inherited.entry_point_canonical_name
-    bare_rv = client.get(f"/flow/{bare.entry_point_canonical_name}")
-    inh_rv = client.get(f"/flow/{inherited.entry_point_canonical_name}")
+    assert (
+        bare.entry_point_invoker_canonical_name
+        != inherited.entry_point_invoker_canonical_name
+    )
+    bare_rv = client.get(f"/flow/{bare.entry_point_invoker_canonical_name}")
+    inh_rv = client.get(f"/flow/{inherited.entry_point_invoker_canonical_name}")
     assert bare_rv.status_code == 200
     assert inh_rv.status_code == 200
     # The inherited flow's page header carries the subtitle.
     assert "Inherited entry point" in inh_rv.get_data(as_text=True)
     assert "Inherited entry point" not in bare_rv.get_data(as_text=True)
+
+
+_FLOW_DATA_RE = re.compile(
+    r'<script type="application/json" id="flow-data">(.*?)</script>',
+    re.DOTALL,
+)
+
+
+def _undefang(s: str) -> str:
+    """Reverse ``serve.app._safe_json``'s defang substitutions."""
+    return (
+        s.replace("<\\/", "</")
+        .replace("<\\!--", "<!--")
+        .replace("<\\script", "<script")
+    )
+
+
+def test_flow_page_routes_colliding_canonicals_distinctly(
+    client: FlaskClient,
+) -> None:
+    """Regression: previously-colliding ``Owned.transferOwnership(address)``
+    and ``MockOwned.transferOwnership(address)`` route to distinct Flows.
+
+    Hits both URL-encoded paths, asserts each returns 200 with an embedded
+    ``<script id="flow-data">`` block, then parses the embedded JSON from
+    each and asserts the payloads differ — minimum: distinct
+    ``entry_point_contract_name``.
+    """
+    owned_url = urllib.parse.quote("Owned.transferOwnership(address)", safe="")
+    mock_url = urllib.parse.quote("MockOwned.transferOwnership(address)", safe="")
+
+    owned_rv = client.get(f"/flow/{owned_url}")
+    mock_rv = client.get(f"/flow/{mock_url}")
+    assert owned_rv.status_code == 200, f"Owned route returned {owned_rv.status_code}"
+    assert mock_rv.status_code == 200, f"MockOwned route returned {mock_rv.status_code}"
+
+    owned_body = owned_rv.get_data(as_text=True)
+    mock_body = mock_rv.get_data(as_text=True)
+    assert '<script type="application/json" id="flow-data">' in owned_body
+    assert '<script type="application/json" id="flow-data">' in mock_body
+
+    owned_match = _FLOW_DATA_RE.search(owned_body)
+    mock_match = _FLOW_DATA_RE.search(mock_body)
+    assert owned_match is not None and mock_match is not None
+    # Reverse the ``_safe_json`` defang substitutions before parsing.
+    owned_data = json.loads(_undefang(owned_match.group(1)))
+    mock_data = json.loads(_undefang(mock_match.group(1)))
+
+    assert owned_data != mock_data, "colliding routes returned identical payloads"
+    assert owned_data["entry_point_contract_name"] == "Owned"
+    assert mock_data["entry_point_contract_name"] == "MockOwned"
 
 
 def test_flow_page_unknown_returns_404(client: FlaskClient) -> None:

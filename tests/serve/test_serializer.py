@@ -22,14 +22,17 @@ from solidity_flow_navigator.serve.serializer import serialize_flow
 def _flow_by_canonical_and_contract(
     flows: tuple[Flow, ...], canonical: str, contract: str
 ) -> Flow:
-    """Look up a Flow by (canonical_name, invoking-contract).
+    """Look up a Flow by (invoker canonical_name, invoking-contract).
 
-    Inherited entry points share their canonical with the declarer (Layer 2
-    quirk; see the Stage 2 commit), so canonical alone is not unique.
+    The ``(canonical, contract)`` pair is retained from the pre-fb42c18 era
+    when ``entry_point_canonical_name`` was the declarer's canonical and not
+    unique per Flow. Layer 2 now exposes ``entry_point_invoker_canonical_name``
+    which is unique by construction, so contract is redundant here — but the
+    extra filter is cheap and keeps the existing call sites stable.
     """
     for f in flows:
         if (
-            f.entry_point_canonical_name == canonical
+            f.entry_point_invoker_canonical_name == canonical
             and f.entry_point_contract_name == contract
         ):
             return f
@@ -41,7 +44,7 @@ def test_top_level_shape(solmate_flows: tuple[Flow, ...]) -> None:
         solmate_flows, "Owned.transferOwnership(address)", "Owned"
     )
     d = serialize_flow(flow)
-    assert d["entry_point_canonical_name"] == "Owned.transferOwnership(address)"
+    assert d["entry_point_invoker_canonical_name"] == "Owned.transferOwnership(address)"
     assert d["entry_point_contract_name"] == "Owned"
     assert d["entry_point_function_name"] == "transferOwnership"
     assert d["signature_suffix"] == "(address)"
@@ -140,7 +143,10 @@ def test_serialized_tree_is_json_dumpable(solmate_flows: tuple[Flow, ...]) -> No
     d = serialize_flow(flow)
     blob = json.dumps(d)  # raises TypeError on unsupported type
     parsed = json.loads(blob)
-    assert parsed["entry_point_canonical_name"] == d["entry_point_canonical_name"]
+    assert (
+        parsed["entry_point_invoker_canonical_name"]
+        == d["entry_point_invoker_canonical_name"]
+    )
     assert parsed["root"]["node_type"] == "function"
     assert parsed["root"]["source_html"] == d["root"]["source_html"]
     assert isinstance(parsed["root"]["children"], list)

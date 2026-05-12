@@ -381,3 +381,65 @@ def test_cycle_detection_state_is_per_flow(
 # builder._is_super_internal_call is verified by inspection only; if a
 # future Solmate update introduces a super call, this comment is the
 # breadcrumb to add a real assertion here.
+
+
+# ---------------------------------------------------------------------------
+# 9. entry_point_invoker_canonical_name uniqueness (regression: 65 collisions
+#    in Solmate when the field was keyed on the declarer)
+# ---------------------------------------------------------------------------
+
+
+def test_entry_point_invoker_canonical_name_unique_across_flows(
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Every Flow's ``entry_point_invoker_canonical_name`` is unique.
+
+    Regression for the inherited-entry-point collision: before the split,
+    ``Flow.entry_point_canonical_name`` was keyed on the declaring contract,
+    so e.g. ``MockOwned.transferOwnership`` and ``Owned.transferOwnership``
+    both reported ``Owned.transferOwnership(address)`` — 65 such collisions
+    across the Solmate fixture. The invoker variant is keyed on the
+    invoking contract and must be globally unique so it can be used as the
+    Layer 3 routing identifier.
+    """
+
+    invoker_names = [f.entry_point_invoker_canonical_name for f in solmate_flows]
+    assert len(invoker_names) == len(set(invoker_names)), (
+        f"entry_point_invoker_canonical_name duplicates in Solmate flows: "
+        f"{sorted({n for n in invoker_names if invoker_names.count(n) > 1})}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 10. Non-inherited entry points: declarer == invoker canonical
+# ---------------------------------------------------------------------------
+
+
+def test_non_inherited_entry_point_declarer_equals_invoker(
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """For an entry point declared on its own invoking contract (no
+    inheritance), the declarer and invoker canonical_names coincide.
+
+    ``MockERC20.mint(address,uint256)`` is declared on MockERC20 itself
+    (the mint helper added for tests). The ``Owned.transferOwnership``
+    flow invoked through ``Owned`` is similarly non-inherited from Owned's
+    own perspective — only its MockOwned sibling carries an inheritance
+    delta.
+    """
+
+    mint = _flow_by_entry_point(solmate_flows, "MockERC20", "mint(address,uint256)")
+    assert mint.entry_point_declarer_canonical_name == "MockERC20.mint(address,uint256)"
+    assert (
+        mint.entry_point_declarer_canonical_name
+        == mint.entry_point_invoker_canonical_name
+    )
+
+    owned = _flow_by_entry_point(solmate_flows, "Owned", "transferOwnership(address)")
+    assert (
+        owned.entry_point_declarer_canonical_name == "Owned.transferOwnership(address)"
+    )
+    assert (
+        owned.entry_point_declarer_canonical_name
+        == owned.entry_point_invoker_canonical_name
+    )

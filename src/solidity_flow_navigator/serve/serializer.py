@@ -34,17 +34,17 @@ def serialize_flow(flow: Flow) -> dict[str, Any]:
     field ``node_type``.
 
     ``signature_suffix`` is the ``(...)`` parameter list extracted from the
-    canonical name; the template uses it together with
+    invoker canonical name; the template uses it together with
     ``entry_point_contract_name`` and ``entry_point_function_name`` to
     display the deployment-surface canonical (e.g.
-    ``MockOwned.transferOwnership(address)``) instead of the declarer-keyed
-    canonical Layer 2 emits.
+    ``MockOwned.transferOwnership(address)``).
     """
-    canon = flow.entry_point_canonical_name
+    canon = flow.entry_point_invoker_canonical_name
     paren = canon.find("(")
     signature_suffix = canon[paren:] if paren != -1 else ""
     return {
-        "entry_point_canonical_name": flow.entry_point_canonical_name,
+        "entry_point_invoker_canonical_name": flow.entry_point_invoker_canonical_name,
+        "entry_point_declarer_canonical_name": flow.entry_point_declarer_canonical_name,
         "entry_point_contract_name": flow.entry_point_contract_name,
         "entry_point_function_name": flow.entry_point_function_name,
         "signature_suffix": signature_suffix,

@@ -74,8 +74,8 @@ def categorize_path(rel_path: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _EntryPointEntry:
-    # The URL-level identifier: ``flow.entry_point_canonical_name``. Unique
-    # across all Flows (Layer 2 keys it on the invoking contract, so
+    # The URL-level identifier: ``flow.entry_point_invoker_canonical_name``.
+    # Unique across all Flows (Layer 2 keys it on the invoking contract, so
     # MockOwned.transferOwnership and Owned.transferOwnership get distinct
     # canonicals).
     url_id: str
@@ -135,7 +135,7 @@ def build_index(
         full_name = flow.entry_point_function_name + _signature_suffix(flow)
         bucket.append(
             _EntryPointEntry(
-                url_id=flow.entry_point_canonical_name,
+                url_id=flow.entry_point_invoker_canonical_name,
                 contract_name=cn,
                 function_full_name=full_name,
             )
@@ -168,7 +168,7 @@ def _signature_suffix(flow: Flow) -> str:
     Falls back to empty if the canonical doesn't include parens (e.g. for
     receive/fallback, where Layer 2 may emit a different shape).
     """
-    canon = flow.entry_point_canonical_name
+    canon = flow.entry_point_invoker_canonical_name
     idx = canon.find("(")
     return canon[idx:] if idx != -1 else ""
 
@@ -189,9 +189,11 @@ def create_app(facts: RepoFacts, flows: tuple[Flow, ...]) -> Flask:
     # Pygments version. Written into the same static dir Flask serves.
     write_pygments_css(Path(app.static_folder))
 
-    # Indexed by ``entry_point_canonical_name`` — Layer 2 keys it on the
-    # invoking contract, so it is unique across all Flows.
-    flow_by_url_id: dict[str, Flow] = {f.entry_point_canonical_name: f for f in flows}
+    # Indexed by ``entry_point_invoker_canonical_name`` — Layer 2 keys it on
+    # the invoking contract, so it is unique across all Flows.
+    flow_by_url_id: dict[str, Flow] = {
+        f.entry_point_invoker_canonical_name: f for f in flows
+    }
     groups, total_eps, total_contracts = build_index(facts, flows)
 
     # Common context for every rendered template.
