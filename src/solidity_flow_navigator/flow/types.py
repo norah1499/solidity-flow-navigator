@@ -106,6 +106,13 @@ FlowNode = FunctionNode | UnresolvedNode | ExternalNode
 class Flow:
     """The rendered artifact for one entry point (spec §11.3).
 
+    ``entry_point_canonical_name`` is the canonical name of the entry point
+    *as invoked* (e.g. ``MockOwned.transferOwnership(address)``). For an
+    inherited entry point this differs from ``root.canonical_name``, which
+    still holds the declarer's canonical (e.g.
+    ``Owned.transferOwnership(address)``). Unique across all Flows in a
+    given ``RepoFacts``, so it is also the URL/lookup key for Layer 3.
+
     ``entry_point_contract_name`` is the contract the entry point is invoked
     on; for an inherited entry point this differs from
     ``root.declarer_contract_name``.

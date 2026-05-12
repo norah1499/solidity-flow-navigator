@@ -189,7 +189,7 @@ class _FlowBuilder:
             children=modifier_children + body_children,
         )
         return Flow(
-            entry_point_canonical_name=entry_func.canonical_name,
+            entry_point_canonical_name=f"{invoked_via}.{entry_func.full_name}",
             entry_point_contract_name=invoked_via,
             entry_point_function_name=entry_func.name,
             root=root_node,

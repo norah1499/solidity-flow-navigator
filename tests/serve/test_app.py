@@ -21,7 +21,7 @@ from flask.testing import FlaskClient
 
 from solidity_flow_navigator.analysis.types import RepoFacts
 from solidity_flow_navigator.flow.types import Flow
-from solidity_flow_navigator.serve.app import create_app, flow_url_id
+from solidity_flow_navigator.serve.app import create_app
 
 
 @pytest.fixture(scope="module")
@@ -65,9 +65,8 @@ def test_flow_page_known_url_id(
         f
         for f in solmate_flows
         if f.entry_point_canonical_name == "ERC4626.deposit(uint256,address)"
-        and f.entry_point_contract_name == "ERC4626"
     )
-    rv = client.get(f"/flow/{flow_url_id(target)}")
+    rv = client.get(f"/flow/{target.entry_point_canonical_name}")
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
     # The embedded JSON the frontend reads.
@@ -83,8 +82,10 @@ def test_flow_page_known_url_id(
 def test_flow_page_inherited_url_does_not_collide(
     client: FlaskClient, solmate_flows: tuple[Flow, ...]
 ) -> None:
-    """The Stage 2 collision fix: MockOwned and Owned both have canonical
-    ``Owned.transferOwnership(address)`` but distinct flow_url_ids."""
+    """MockOwned and Owned each get their own URL: Layer 2's
+    ``entry_point_canonical_name`` is keyed on the invoking contract, so the
+    two flows carry distinct canonicals (``MockOwned.transferOwnership(...)``
+    vs ``Owned.transferOwnership(...)``) and route independently."""
     bare = next(
         f
         for f in solmate_flows
@@ -97,8 +98,9 @@ def test_flow_page_inherited_url_does_not_collide(
         if f.entry_point_contract_name == "MockOwned"
         and f.entry_point_function_name == "transferOwnership"
     )
-    bare_rv = client.get(f"/flow/{flow_url_id(bare)}")
-    inh_rv = client.get(f"/flow/{flow_url_id(inherited)}")
+    assert bare.entry_point_canonical_name != inherited.entry_point_canonical_name
+    bare_rv = client.get(f"/flow/{bare.entry_point_canonical_name}")
+    inh_rv = client.get(f"/flow/{inherited.entry_point_canonical_name}")
     assert bare_rv.status_code == 200
     assert inh_rv.status_code == 200
     # The inherited flow's page header carries the subtitle.

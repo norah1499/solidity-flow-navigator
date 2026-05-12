@@ -74,11 +74,10 @@ def categorize_path(rel_path: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _EntryPointEntry:
-    # The URL-level identifier: ``<entry_point_contract_name>.<function_full_name>``.
-    # Uniquely identifies a Flow even when multiple Flows share an inherited
-    # ``entry_point_canonical_name`` (Layer 2 keys that on the declarer, so
-    # MockOwned.transferOwnership and Owned.transferOwnership both report
-    # canonical "Owned.transferOwnership(address)"). See ``flow_url_id`` below.
+    # The URL-level identifier: ``flow.entry_point_canonical_name``. Unique
+    # across all Flows (Layer 2 keys it on the invoking contract, so
+    # MockOwned.transferOwnership and Owned.transferOwnership get distinct
+    # canonicals).
     url_id: str
     contract_name: str
     function_full_name: str
@@ -136,7 +135,7 @@ def build_index(
         full_name = flow.entry_point_function_name + _signature_suffix(flow)
         bucket.append(
             _EntryPointEntry(
-                url_id=flow_url_id(flow),
+                url_id=flow.entry_point_canonical_name,
                 contract_name=cn,
                 function_full_name=full_name,
             )
@@ -174,24 +173,6 @@ def _signature_suffix(flow: Flow) -> str:
     return canon[idx:] if idx != -1 else ""
 
 
-def flow_url_id(flow: Flow) -> str:
-    """Unique URL/lookup identifier for a Flow.
-
-    Layer 2's ``entry_point_canonical_name`` is keyed on the declaring
-    contract, so inherited entry points collide (e.g. MockOwned and Owned
-    both report ``Owned.transferOwnership(address)``). The URL needs the
-    *invoking* contract — the deployment surface — to be unique. We build
-    that from ``entry_point_contract_name`` + the function full name +
-    signature suffix.
-    """
-    return (
-        flow.entry_point_contract_name
-        + "."
-        + flow.entry_point_function_name
-        + _signature_suffix(flow)
-    )
-
-
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -208,9 +189,9 @@ def create_app(facts: RepoFacts, flows: tuple[Flow, ...]) -> Flask:
     # Pygments version. Written into the same static dir Flask serves.
     write_pygments_css(Path(app.static_folder))
 
-    # Indexed by ``flow_url_id`` (invoking-contract.full_name(sig)), NOT by
-    # ``entry_point_canonical_name`` — see ``flow_url_id`` for why.
-    flow_by_url_id: dict[str, Flow] = {flow_url_id(f): f for f in flows}
+    # Indexed by ``entry_point_canonical_name`` — Layer 2 keys it on the
+    # invoking contract, so it is unique across all Flows.
+    flow_by_url_id: dict[str, Flow] = {f.entry_point_canonical_name: f for f in flows}
     groups, total_eps, total_contracts = build_index(facts, flows)
 
     # Common context for every rendered template.
