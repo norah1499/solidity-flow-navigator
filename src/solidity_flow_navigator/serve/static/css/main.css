@@ -167,6 +167,23 @@ code, pre { font-family: var(--font-mono); }
   font-weight: 400;
 }
 
+.entry-section {
+  margin: 0 0 0.75rem;
+}
+
+.entry-section:last-child {
+  margin-bottom: 0;
+}
+
+.section-heading {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  margin: 0.5rem 0 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .entry-list {
   list-style: none;
   margin: 0;

@@ -87,7 +87,11 @@ class _EntryPointEntry:
 class _ContractEntry:
     name: str
     source_path: str
-    entry_points: tuple[_EntryPointEntry, ...]
+    # Partitioned per spec §8.3: non-view, non-pure roots vs view-or-pure roots.
+    # Empty tuples render nothing — the template omits the section header rather
+    # than emitting a "Read-only (none)" placeholder.
+    mutating_entry_points: tuple[_EntryPointEntry, ...]
+    read_only_entry_points: tuple[_EntryPointEntry, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,17 +113,19 @@ def _contract_source_paths(facts: RepoFacts) -> dict[str, str]:
 def build_index(
     facts: RepoFacts, flows: Iterable[Flow]
 ) -> tuple[tuple[_GroupEntry, ...], int, int]:
-    """Group flows by category → contract → entry point.
+    """Group flows by category → contract → entry point, sub-grouped by mutability.
 
     Returns ``(groups, total_entry_points, total_contracts)``. Empty groups
     are still returned (so the template can decide whether to show them).
     Within a group, contracts are sorted alphabetically; within a contract,
-    entry points are sorted by full_name.
+    each mutability bucket is sorted by full_name independently (spec §8.3).
     """
     contract_paths = _contract_source_paths(facts)
 
-    # group_label -> contract_name -> list[_EntryPointEntry]
-    by_group: dict[str, dict[str, list[_EntryPointEntry]]] = {
+    # group_label -> contract_name -> list[(flow, _EntryPointEntry)]
+    # We carry the Flow alongside the entry so the mutability partition below
+    # can read ``flow.root.view`` / ``flow.root.pure`` without re-walking flows.
+    by_group: dict[str, dict[str, list[tuple[Flow, _EntryPointEntry]]]] = {
         label: {} for label in GROUP_ORDER
     }
 
@@ -134,10 +140,13 @@ def build_index(
         bucket = by_group[label].setdefault(cn, [])
         full_name = flow.entry_point_function_name + _signature_suffix(flow)
         bucket.append(
-            _EntryPointEntry(
-                url_id=flow.entry_point_invoker_canonical_name,
-                contract_name=cn,
-                function_full_name=full_name,
+            (
+                flow,
+                _EntryPointEntry(
+                    url_id=flow.entry_point_invoker_canonical_name,
+                    contract_name=cn,
+                    function_full_name=full_name,
+                ),
             )
         )
         total += 1
@@ -147,13 +156,21 @@ def build_index(
     for label in GROUP_ORDER:
         contracts: list[_ContractEntry] = []
         for cn in sorted(by_group[label]):
-            eps = sorted(by_group[label][cn], key=lambda e: e.function_full_name)
+            pairs = sorted(by_group[label][cn], key=lambda fe: fe[1].function_full_name)
+            mutating: list[_EntryPointEntry] = []
+            read_only: list[_EntryPointEntry] = []
+            for flow, ep in pairs:
+                if flow.root.view or flow.root.pure:
+                    read_only.append(ep)
+                else:
+                    mutating.append(ep)
             path = contract_paths.get(cn, "")
             contracts.append(
                 _ContractEntry(
                     name=cn,
                     source_path=path,
-                    entry_points=tuple(eps),
+                    mutating_entry_points=tuple(mutating),
+                    read_only_entry_points=tuple(read_only),
                 )
             )
             contract_count += 1

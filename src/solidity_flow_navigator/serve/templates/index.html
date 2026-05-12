@@ -20,15 +20,34 @@
         {{ contract.name }}
         <span class="contract-path">{{ contract.source_path }}</span>
       </h3>
-      <ul class="entry-list">
-        {% for ep in contract.entry_points %}
-        <li>
-          <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
-            <code>{{ ep.contract_name }}.{{ ep.function_full_name }}</code>
-          </a>
-        </li>
-        {% endfor %}
-      </ul>
+      {% if contract.mutating_entry_points %}
+      <section class="entry-section">
+        <h4 class="section-heading">Mutating</h4>
+        <ul class="entry-list">
+          {% for ep in contract.mutating_entry_points %}
+          <li>
+            <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
+              <code>{{ ep.contract_name }}.{{ ep.function_full_name }}</code>
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
+      {% if contract.read_only_entry_points %}
+      <section class="entry-section">
+        <h4 class="section-heading">Read-only</h4>
+        <ul class="entry-list">
+          {% for ep in contract.read_only_entry_points %}
+          <li>
+            <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
+              <code>{{ ep.contract_name }}.{{ ep.function_full_name }}</code>
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+      </section>
+      {% endif %}
     </article>
     {% endfor %}
   </section>

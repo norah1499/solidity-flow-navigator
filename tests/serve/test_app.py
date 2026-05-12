@@ -25,7 +25,7 @@ from flask.testing import FlaskClient
 
 from solidity_flow_navigator.analysis.types import RepoFacts
 from solidity_flow_navigator.flow.types import Flow
-from solidity_flow_navigator.serve.app import create_app
+from solidity_flow_navigator.serve.app import build_index, create_app
 
 
 @pytest.fixture(scope="module")
@@ -57,6 +57,99 @@ def test_index_lists_solmate_application_contracts(client: FlaskClient) -> None:
         assert (
             f">{name}\n" in body or f">{name}<" in body or f"  {name}\n" in body
         ), f"contract {name} missing from index"
+
+
+# -- index sub-grouping (spec §8.3): Mutating vs Read-only -------------------
+
+
+def _extract_contract_block(body: str, contract_name: str) -> str:
+    """Return the substring of ``body`` covering one contract's ``<article>``.
+
+    The index template emits one ``<article class="contract-block">`` per
+    contract. We locate the article whose ``<h3>`` opens with ``contract_name``
+    followed by a newline (the template formatting), then slice to the next
+    ``</article>``. Avoids pulling in an HTML parser for what is a simple
+    boundary problem at this scale.
+    """
+    needle = '<article class="contract-block">'
+    start = 0
+    while True:
+        article_start = body.find(needle, start)
+        assert article_start != -1, f"no contract block found for {contract_name}"
+        article_end = body.find("</article>", article_start)
+        assert article_end != -1, "unterminated <article> in rendered index"
+        block = body[article_start:article_end]
+        # The <h3> renders the name followed by a newline before the path span.
+        if f">\n        {contract_name}\n" in block or f">{contract_name}\n" in block:
+            return block
+        start = article_end
+
+
+def test_index_sub_groups_both_sections_for_mixed_contract(
+    client: FlaskClient,
+) -> None:
+    """Spec §8.3: a contract with both mutating and read-only entry points
+    renders both section headings inside its ``<article>``.
+
+    ERC4626 is the canonical mixed case in Solmate: ``deposit``/``mint``/
+    ``withdraw``/``redeem``/``transfer``/``approve``/``permit``/
+    ``transferFrom`` are mutating; ``previewX``, ``convertToX``, ``maxX``,
+    ``totalAssets``, ``DOMAIN_SEPARATOR``, etc. are view.
+    """
+    rv = client.get("/")
+    assert rv.status_code == 200
+    body = rv.get_data(as_text=True)
+    block = _extract_contract_block(body, "ERC4626")
+    assert ">Mutating<" in block, "Mutating section missing from ERC4626 block"
+    assert ">Read-only<" in block, "Read-only section missing from ERC4626 block"
+
+
+def test_index_omits_empty_section_for_single_kind_contract(
+    client: FlaskClient,
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Spec §8.3: sections containing zero entry points are omitted entirely
+    (no ``Read-only`` placeholder header on a contract with only mutating
+    entry points, and vice versa).
+
+    Discovered dynamically rather than hardcoded: most Solmate contracts have
+    a public-state-variable getter that auto-creates a view entry point, so a
+    naive "pick a contract you think is mutating-only" can become mixed if
+    Solmate's source shifts. Walking ``build_index``'s output is the
+    authoritative source of truth.
+    """
+    groups, _, _ = build_index(solmate_facts, solmate_flows)
+    single_kind: tuple[str, str] | None = None  # (contract_name, present_section)
+    for group in groups:
+        for contract in group.contracts:
+            m = len(contract.mutating_entry_points)
+            r = len(contract.read_only_entry_points)
+            if m and not r:
+                single_kind = (contract.name, "Mutating")
+                break
+            if r and not m:
+                single_kind = (contract.name, "Read-only")
+                break
+        if single_kind is not None:
+            break
+    assert single_kind is not None, (
+        "expected at least one Solmate contract with a single-kind entry-point "
+        "list; index data shape may have changed"
+    )
+    contract_name, present = single_kind
+    absent = "Read-only" if present == "Mutating" else "Mutating"
+
+    rv = client.get("/")
+    assert rv.status_code == 200
+    body = rv.get_data(as_text=True)
+    block = _extract_contract_block(body, contract_name)
+    assert (
+        f">{present}<" in block
+    ), f"{present} section missing from {contract_name} block"
+    assert (
+        f">{absent}<" not in block
+    ), f"{absent} placeholder header should be omitted for {contract_name}"
 
 
 # -- flow page --------------------------------------------------------------
