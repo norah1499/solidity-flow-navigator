@@ -765,3 +765,181 @@ def test_synthetic_inline_libraries_name_must_match_segment() -> None:
     assert isinstance(
         child, ExternalNode
     ), f"expected ExternalNode (no inlining match), got {type(child).__name__}"
+
+
+# ---------------------------------------------------------------------------
+# 13. Synthetic stub_paths tests — controlled facts isolating §11.8's
+# in-tree-stub mechanism and the stub_paths-vs-inline_libraries conflict rule.
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_facts_with_in_tree_lib_call():
+    """Build a tiny RepoFacts: one in-scope contract `App` calling
+    `MathLib.add()` declared under `src/libraries/MathLib.sol` (in-tree).
+
+    Without ``stub_paths``, App.entry recurses into MathLib.add (it's not
+    under lib/). With ``stub_paths=("src/libraries/**",)``, the call stubs
+    as ExternalNode. This is the v0.2 in-tree compression mechanism.
+    """
+
+    from solidity_flow_navigator.analysis.types import (
+        CallEdge,
+        Contract,
+        Function,
+        RepoFacts,
+    )
+
+    add = Function(
+        canonical_name="MathLib.add(uint256,uint256)",
+        name="add",
+        full_name="add(uint256,uint256)",
+        contract_declarer_name="MathLib",
+        visibility="internal",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=True,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/libraries/MathLib.sol"),
+        source_code="function add(uint256 a, uint256 b) internal pure returns (uint256) { return a + b; }",
+        calls=(),
+    )
+    entry_call = CallEdge(
+        kind="library",
+        subkind=None,
+        target_canonical_name="MathLib.add(uint256,uint256)",
+        target_function_name="add",
+        target_contract_name="MathLib",
+        is_resolved=True,
+        source_location=_sl("src/App.sol"),
+    )
+    entry = Function(
+        canonical_name="App.entry()",
+        name="entry",
+        full_name="entry()",
+        contract_declarer_name="App",
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/App.sol"),
+        source_code="function entry() external { MathLib.add(1, 2); }",
+        calls=(entry_call,),
+    )
+    app = Contract(
+        name="App",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl("src/App.sol"),
+        functions=(entry,),
+        modifiers=(),
+    )
+    math_lib = Contract(
+        name="MathLib",
+        kind="library",
+        is_interface=False,
+        is_library=True,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl("src/libraries/MathLib.sol"),
+        functions=(add,),
+        modifiers=(),
+    )
+    return RepoFacts(
+        repo_path="/abs",
+        contracts=(app, math_lib),
+        free_functions=(),
+    )
+
+
+def test_stub_paths_stubs_in_tree_library_target() -> None:
+    """An in-tree call target whose path matches ``stub_paths`` emits an
+    ExternalNode (terminal) instead of recursing — the v0.2 in-tree
+    compression mechanism per spec §11.2 / §11.8.
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _synthetic_facts_with_in_tree_lib_call()
+    flows = build_flows(facts, Scope(stub_paths=("src/libraries/**",)))
+    assert len(flows) == 1
+    children = flows[0].root.children
+    assert len(children) == 1
+    assert isinstance(children[0], ExternalNode), (
+        f"expected ExternalNode (stub_paths match), got "
+        f"{type(children[0]).__name__}"
+    )
+    assert children[0].target_canonical_name == "MathLib.add(uint256,uint256)"
+    assert children[0].source_path == "src/libraries/MathLib.sol"
+
+
+def test_stub_paths_negative_regression_unmatched_in_tree_recurses() -> None:
+    """An in-tree library file that does NOT match any ``stub_paths`` glob
+    still recurses normally — the v0.2 mechanism is opt-in per call target,
+    not a blanket in-tree behavior change.
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _synthetic_facts_with_in_tree_lib_call()
+    flows = build_flows(facts, Scope(stub_paths=("src/utils/**",)))
+    assert len(flows) == 1
+    child = flows[0].root.children[0]
+    assert isinstance(child, FunctionNode), (
+        f"expected FunctionNode (stub_paths did not match MathLib path), "
+        f"got {type(child).__name__}"
+    )
+    assert child.canonical_name == "MathLib.add(uint256,uint256)"
+
+
+def test_stub_paths_wins_over_inline_libraries_conflict_rule() -> None:
+    """Per spec §11.8 conflict rule: when a path matches BOTH ``stub_paths``
+    and ``inline_libraries``, ``stub_paths`` wins. The auditor's explicit
+    "stop here" beats the default-stub override.
+
+    Setup: lib/widget/Lib.sol target. ``inline_libraries=("widget",)``
+    would normally cause recursion (it overrides the default lib stub). A
+    matching ``stub_paths`` glob must override that override → ExternalNode.
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _synthetic_facts_with_lib_call()
+    flows = build_flows(
+        facts,
+        Scope(
+            inline_libraries=("widget",),
+            stub_paths=("lib/widget/**",),
+        ),
+    )
+    assert len(flows) == 1
+    child = flows[0].root.children[0]
+    assert isinstance(child, ExternalNode), (
+        f"expected ExternalNode (stub_paths wins over inline_libraries), "
+        f"got {type(child).__name__}"
+    )
+    assert child.source_path == "lib/widget/Lib.sol"

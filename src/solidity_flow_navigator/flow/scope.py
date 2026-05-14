@@ -1,8 +1,8 @@
-"""User-configured scope rules: include/exclude lists and library inlining
-preferences (spec §11.2).
+"""User-configured scope rules: include/exclude lists, library inlining,
+and in-tree stubbing preferences (spec §11.2).
 
 In v0 the Scope was always ``DEFAULT_SCOPE`` and the dataclass carried no
-fields. v0.1 introduces three rule sets:
+fields. v0.1 introduced three rule sets; v0.2 adds a fourth:
 
 - ``exclude_paths``: gitignore-style globs matched against each contract's
   ``source_location.filename_relative``. Matching contracts produce no Flows.
@@ -11,12 +11,17 @@ fields. v0.1 introduces three rule sets:
 - ``inline_libraries``: library name prefixes. A dependency under
   ``lib/{name}/**`` recurses into Layer 2 instead of stubbing as
   ``ExternalNode`` when ``{name}`` appears in this tuple.
+- ``stub_paths`` (v0.2): gitignore-style globs matched against each call
+  target's ``source_location.filename_relative``. Matching call targets emit
+  an ``ExternalNode`` (terminal) instead of recursing — the auditor uses
+  this to compress dense in-tree libraries whose internals aren't
+  load-bearing for the Flow at hand.
 
 ``DEFAULT_SCOPE`` carries the hard-coded defaults from §11.2 so first-run
 output on real codebases is usable without configuration ceremony (P3).
 ``--no-default-excludes`` (in the CLI) clears ``exclude_paths`` and
-``exclude_contracts`` before file/CLI values apply; ``inline_libraries`` has
-no default to clear.
+``exclude_contracts`` before file/CLI values apply; ``inline_libraries`` and
+``stub_paths`` have no defaults to clear.
 
 Glob matching uses `pathspec` with gitignore syntax (the ``gitwildmatch``
 factory was deprecated in pathspec 1.x in favor of ``gitignore``). Compiled
@@ -34,7 +39,7 @@ import pathspec
 class Scope:
     """Container for user-configured scope rules.
 
-    All three fields are tuples (frozen, hashable) so a Scope can key an
+    All four fields are tuples (frozen, hashable) so a Scope can key an
     ``lru_cache``. CLI resolution constructs the final Scope after layering
     defaults, file values, and CLI flag values per spec §11.2.
     """
@@ -42,12 +47,20 @@ class Scope:
     exclude_paths: tuple[str, ...] = ()
     exclude_contracts: tuple[str, ...] = ()
     inline_libraries: tuple[str, ...] = ()
+    stub_paths: tuple[str, ...] = ()
 
 
+# Default tuple values track spec §11.2's "Default scope" block. v0.2 broadens
+# the v0.1 defaults to cover Morpho-style mock conventions (suffix ``Mock``
+# rather than prefix; mocks living under ``src/mocks/`` rather than under a
+# test directory) without retreating from the Solmate-style coverage v0.1
+# already provided. ``stub_paths`` defaults empty — in-tree library stubbing
+# is the auditor's call, never assumed.
 DEFAULT_SCOPE: Scope = Scope(
-    exclude_paths=("**/*.t.sol", "**/test/**", "**/tests/**"),
-    exclude_contracts=("Mock*",),
+    exclude_paths=("**/*.t.sol", "**/test/**", "**/tests/**", "**/mocks/**"),
+    exclude_contracts=("*Mock*",),
     inline_libraries=(),
+    stub_paths=(),
 )
 
 
@@ -117,3 +130,18 @@ def library_inlined(scope: Scope, filename_relative: str) -> bool:
         return False
     name = remainder[:slash]
     return name in scope.inline_libraries
+
+
+def target_stubbed(scope: Scope, filename_relative: str) -> bool:
+    """True if ``filename_relative`` matches any ``scope.stub_paths`` glob.
+
+    Semantically identical to ``path_excluded`` but applied to call targets
+    (in Layer 2's dispatch) rather than to invoker contracts (in Layer 2's
+    outer enumeration). The two matchers are kept separate because they live
+    on different scope fields with different defaults — sharing the helper
+    would obscure that distinction. Empty pattern tuple → always False.
+    """
+
+    if not scope.stub_paths:
+        return False
+    return _compile_spec(scope.stub_paths).match_file(filename_relative)

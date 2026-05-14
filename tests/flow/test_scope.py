@@ -12,6 +12,7 @@ from solidity_flow_navigator.flow.scope import (
     contract_excluded,
     library_inlined,
     path_excluded,
+    target_stubbed,
 )
 
 # ---------------------------------------------------------------------------
@@ -33,15 +34,23 @@ def test_scope_is_frozen_and_slotted() -> None:
 
 
 def test_default_scope_matches_spec_11_2() -> None:
-    """The hard-coded defaults are part of the user-visible contract."""
+    """The hard-coded defaults are part of the user-visible contract.
+
+    v0.2 broadened ``exclude_paths`` to add ``**/mocks/**`` and broadened
+    ``exclude_contracts`` from prefix-only ``Mock*`` to wildcard ``*Mock*``
+    so suffix conventions (``ERC20Mock``) match too. ``stub_paths`` is the
+    new v0.2 field, defaulting empty.
+    """
 
     assert DEFAULT_SCOPE.exclude_paths == (
         "**/*.t.sol",
         "**/test/**",
         "**/tests/**",
+        "**/mocks/**",
     )
-    assert DEFAULT_SCOPE.exclude_contracts == ("Mock*",)
+    assert DEFAULT_SCOPE.exclude_contracts == ("*Mock*",)
     assert DEFAULT_SCOPE.inline_libraries == ()
+    assert DEFAULT_SCOPE.stub_paths == ()
 
 
 def test_empty_scope_constructs() -> None:
@@ -52,6 +61,7 @@ def test_empty_scope_constructs() -> None:
     assert s.exclude_paths == ()
     assert s.exclude_contracts == ()
     assert s.inline_libraries == ()
+    assert s.stub_paths == ()
 
 
 def test_scope_is_hashable() -> None:
@@ -92,6 +102,15 @@ def test_path_excluded_default_matches_tests_directory() -> None:
     assert path_excluded(DEFAULT_SCOPE, "tests/integration/Bar.sol") is True
 
 
+def test_path_excluded_default_matches_mocks_directory() -> None:
+    """v0.2 default: ``**/mocks/**`` covers Morpho-style mock layouts where
+    helpers live under ``src/mocks/`` rather than under a test directory."""
+
+    assert path_excluded(DEFAULT_SCOPE, "src/mocks/OracleMock.sol") is True
+    assert path_excluded(DEFAULT_SCOPE, "src/mocks/sub/Helper.sol") is True
+    assert path_excluded(DEFAULT_SCOPE, "mocks/ERC20Mock.sol") is True
+
+
 def test_path_excluded_default_does_not_match_production() -> None:
     """Production paths must pass through cleanly under the defaults."""
 
@@ -123,16 +142,28 @@ def test_path_excluded_custom_pattern() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_contract_excluded_default_matches_mock_prefix() -> None:
-    """The ``Mock*`` default catches Solmate's ``MockERC20`` etc."""
+def test_contract_excluded_default_matches_solmate_mock_prefix() -> None:
+    """The v0.2 ``*Mock*`` default still catches Solmate's prefix style
+    (``MockERC20``, ``MockERC721``) — the broadening from ``Mock*`` to
+    ``*Mock*`` must not regress prefix coverage."""
 
     assert contract_excluded(DEFAULT_SCOPE, "MockERC20") is True
     assert contract_excluded(DEFAULT_SCOPE, "MockERC721") is True
     assert contract_excluded(DEFAULT_SCOPE, "Mock") is True
 
 
+def test_contract_excluded_default_matches_morpho_mock_suffix() -> None:
+    """v0.2 broadens to ``*Mock*`` so suffix conventions match too. Morpho
+    Blue uses ``ERC20Mock``, ``OracleMock``, ``IrmMock`` — all caught by the
+    new glob, none caught by the v0.1 ``Mock*`` prefix-only default."""
+
+    assert contract_excluded(DEFAULT_SCOPE, "ERC20Mock") is True
+    assert contract_excluded(DEFAULT_SCOPE, "OracleMock") is True
+    assert contract_excluded(DEFAULT_SCOPE, "IrmMock") is True
+
+
 def test_contract_excluded_default_does_not_match_production() -> None:
-    """Names that don't carry the ``Mock`` prefix pass through."""
+    """Names that don't carry ``Mock`` anywhere pass through."""
 
     assert contract_excluded(DEFAULT_SCOPE, "ERC20") is False
     assert contract_excluded(DEFAULT_SCOPE, "Vault") is False
@@ -215,3 +246,65 @@ def test_library_inlined_multiple_names() -> None:
     assert library_inlined(s, "lib/forge-std/src/Vm.sol") is True
     assert library_inlined(s, "lib/openzeppelin-contracts/token/ERC20.sol") is True
     assert library_inlined(s, "lib/solmate/src/auth/Owned.sol") is False
+
+
+# ---------------------------------------------------------------------------
+# target_stubbed (v0.2)
+# ---------------------------------------------------------------------------
+
+
+def test_target_stubbed_default_stubs_nothing() -> None:
+    """Default scope has empty ``stub_paths`` — every in-tree call target
+    recurses normally. The v0.2 default is opt-in: auditors compress
+    explicitly, never by accident."""
+
+    assert target_stubbed(DEFAULT_SCOPE, "src/libraries/MathLib.sol") is False
+    assert target_stubbed(DEFAULT_SCOPE, "anything/anywhere.sol") is False
+
+
+def test_target_stubbed_empty_scope_stubs_nothing() -> None:
+    """An empty Scope (no defaults at all) matches no path."""
+
+    empty = Scope()
+    assert target_stubbed(empty, "src/libraries/MathLib.sol") is False
+    assert target_stubbed(empty, "src/Vault.sol") is False
+
+
+def test_target_stubbed_single_pattern() -> None:
+    """A single glob in ``stub_paths`` matches its targets and nothing else."""
+
+    s = Scope(stub_paths=("src/libraries/**",))
+    assert target_stubbed(s, "src/libraries/MathLib.sol") is True
+    assert target_stubbed(s, "src/libraries/sub/Helper.sol") is True
+    assert target_stubbed(s, "src/Vault.sol") is False
+
+
+def test_target_stubbed_multi_pattern() -> None:
+    """Each pattern in the tuple is OR'd: a target matching any one pattern
+    is stubbed."""
+
+    s = Scope(stub_paths=("src/libraries/**", "src/utils/**"))
+    assert target_stubbed(s, "src/libraries/MathLib.sol") is True
+    assert target_stubbed(s, "src/utils/Strings.sol") is True
+    assert target_stubbed(s, "src/Vault.sol") is False
+
+
+def test_target_stubbed_filename_glob() -> None:
+    """``stub_paths`` accepts gitignore-style filename globs, not just
+    directory globs — useful for one-off compression of a single file."""
+
+    s = Scope(stub_paths=("**/MathLib.sol",))
+    assert target_stubbed(s, "src/libraries/MathLib.sol") is True
+    assert target_stubbed(s, "src/MathLib.sol") is True
+    assert target_stubbed(s, "src/libraries/Other.sol") is False
+
+
+def test_target_stubbed_can_match_lib_paths() -> None:
+    """``stub_paths`` is matched against any filename — including paths under
+    ``lib/``. The Layer 2 conflict rule (§11.8) gives ``stub_paths`` priority
+    over the default lib stub and over ``inline_libraries``; the matcher
+    itself is shape-agnostic."""
+
+    s = Scope(stub_paths=("lib/forge-std/**",))
+    assert target_stubbed(s, "lib/forge-std/src/Vm.sol") is True
+    assert target_stubbed(s, "lib/openzeppelin/contracts/ERC20.sol") is False

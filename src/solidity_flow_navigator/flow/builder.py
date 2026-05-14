@@ -20,7 +20,13 @@ from solidity_flow_navigator.analysis.types import (
 )
 
 from .modifiers import resolve_modifier
-from .scope import Scope, contract_excluded, library_inlined, path_excluded
+from .scope import (
+    Scope,
+    contract_excluded,
+    library_inlined,
+    path_excluded,
+    target_stubbed,
+)
 from .types import (
     ExternalNode,
     Flow,
@@ -435,19 +441,28 @@ class _FlowBuilder:
         if target.is_modifier:
             return None  # type: ignore[return-value]
 
-        # Free functions terminate as ExternalNode regardless of source path
-        # (v0 simplification — they're navigable in source but their bodies
-        # don't expand into the call tree). Library paths under lib/{name}/...
-        # also terminate as ExternalNode unless ``scope.inline_libraries``
-        # names {name}, in which case Layer 2 recurses (§11.2 / §11.8). Free
-        # functions are NOT covered by inline_libraries — that mechanism
-        # targets package-name-keyed library directories, not standalone
-        # top-level functions, per §11.10's v0 simplification.
+        # External-vs-recurse decision in this precedence order (§11.8):
+        # 1. ``stub_paths`` matches the target → ExternalNode. The auditor's
+        #    explicit "stop here" wins over any default-stub override; this
+        #    is the §11.8 conflict rule for the stub_paths-vs-inline_libraries
+        #    overlap (e.g. ``lib/forge-std/**`` configured both ways).
+        # 2. Free function (v0 simplification, §11.10) → ExternalNode.
+        # 3. Library path under ``lib/`` or ``node_modules/`` → ExternalNode
+        #    unless ``scope.inline_libraries`` names the package, in which
+        #    case Layer 2 recurses (§11.2 / §11.8). Free functions are NOT
+        #    covered by inline_libraries — that mechanism targets
+        #    package-name-keyed directories, not standalone top-level
+        #    functions, per §11.10's v0 simplification.
+        # 4. Otherwise: recurse into the target's body.
         target_path = target.source_location.filename_relative
         is_free_function = target.contract_declarer_name == ""
-        if is_free_function or (
-            _is_external_path(target_path)
-            and not library_inlined(self.scope, target_path)
+        if (
+            target_stubbed(self.scope, target_path)
+            or is_free_function
+            or (
+                _is_external_path(target_path)
+                and not library_inlined(self.scope, target_path)
+            )
         ):
             return self._external_node(target, edge)
 
@@ -492,9 +507,12 @@ class _FlowBuilder:
                 raw_kind=edge.kind,
                 raw_subkind=edge.subkind,
             )
+        # Same precedence as _handle_internal_or_library: stub_paths wins
+        # over the default lib/-stub-vs-inline decision (§11.8 conflict rule).
         target_path = target.source_location.filename_relative
-        if _is_external_path(target_path) and not library_inlined(
-            self.scope, target_path
+        if target_stubbed(self.scope, target_path) or (
+            _is_external_path(target_path)
+            and not library_inlined(self.scope, target_path)
         ):
             return self._external_node(target, edge)
         # High-level cross-contract call: invoked_via is the target's own

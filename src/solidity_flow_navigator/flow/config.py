@@ -34,6 +34,7 @@ _KNOWN_SCOPE_KEYS: frozenset[str] = frozenset(
         "exclude_paths",
         "exclude_contracts",
         "inline_libraries",
+        "stub_paths",
     }
 )
 
@@ -70,6 +71,7 @@ class PartialScope:
     exclude_paths: tuple[str, ...] | None = None
     exclude_contracts: tuple[str, ...] | None = None
     inline_libraries: tuple[str, ...] | None = None
+    stub_paths: tuple[str, ...] | None = None
 
 
 def load_partial_scope_from_toml(path: Path) -> PartialScope:
@@ -122,6 +124,7 @@ def load_partial_scope_from_toml(path: Path) -> PartialScope:
         exclude_paths=_extract_string_list(scope_table, "exclude_paths", path),
         exclude_contracts=_extract_string_list(scope_table, "exclude_contracts", path),
         inline_libraries=_extract_string_list(scope_table, "inline_libraries", path),
+        stub_paths=_extract_string_list(scope_table, "stub_paths", path),
     )
 
 
@@ -151,6 +154,9 @@ def apply_partial(base: Scope, partial: PartialScope) -> Scope:
             base.inline_libraries
             if partial.inline_libraries is None
             else partial.inline_libraries
+        ),
+        stub_paths=(
+            base.stub_paths if partial.stub_paths is None else partial.stub_paths
         ),
     )
 

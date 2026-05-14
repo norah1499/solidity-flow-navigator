@@ -47,6 +47,7 @@ def test_partial_scope_defaults_to_all_none() -> None:
     assert p.exclude_paths is None
     assert p.exclude_contracts is None
     assert p.inline_libraries is None
+    assert p.stub_paths is None
 
 
 def test_partial_scope_distinguishes_absent_from_empty() -> None:
@@ -100,13 +101,14 @@ def test_load_empty_scope_table_returns_all_none(tmp_path: Path) -> None:
 
 
 def test_load_each_key_absent_individually(tmp_path: Path) -> None:
-    """When only one key is present, the other two stay None."""
+    """When only one key is present, the others stay None."""
 
     path = _write_toml(tmp_path, '[scope]\nexclude_paths = ["src/legacy/**"]\n')
     p = load_partial_scope_from_toml(path)
     assert p.exclude_paths == ("src/legacy/**",)
     assert p.exclude_contracts is None
     assert p.inline_libraries is None
+    assert p.stub_paths is None
 
 
 def test_load_each_key_empty_list_clears(tmp_path: Path) -> None:
@@ -117,12 +119,14 @@ def test_load_each_key_empty_list_clears(tmp_path: Path) -> None:
         "[scope]\n"
         "exclude_paths = []\n"
         "exclude_contracts = []\n"
-        "inline_libraries = []\n",
+        "inline_libraries = []\n"
+        "stub_paths = []\n",
     )
     p = load_partial_scope_from_toml(path)
     assert p.exclude_paths == ()
     assert p.exclude_contracts == ()
     assert p.inline_libraries == ()
+    assert p.stub_paths == ()
 
 
 def test_load_each_key_populated(tmp_path: Path) -> None:
@@ -132,13 +136,27 @@ def test_load_each_key_populated(tmp_path: Path) -> None:
         tmp_path,
         "[scope]\n"
         'exclude_paths = ["**/*.t.sol", "src/legacy/**"]\n'
-        'exclude_contracts = ["Mock*", "*Test"]\n'
-        'inline_libraries = ["forge-std", "openzeppelin-contracts"]\n',
+        'exclude_contracts = ["*Mock*", "*Test"]\n'
+        'inline_libraries = ["forge-std", "openzeppelin-contracts"]\n'
+        'stub_paths = ["src/libraries/**", "src/utils/Strings.sol"]\n',
     )
     p = load_partial_scope_from_toml(path)
     assert p.exclude_paths == ("**/*.t.sol", "src/legacy/**")
-    assert p.exclude_contracts == ("Mock*", "*Test")
+    assert p.exclude_contracts == ("*Mock*", "*Test")
     assert p.inline_libraries == ("forge-std", "openzeppelin-contracts")
+    assert p.stub_paths == ("src/libraries/**", "src/utils/Strings.sol")
+
+
+def test_load_stub_paths_absent_stays_none(tmp_path: Path) -> None:
+    """A TOML file that omits ``stub_paths`` leaves the partial sentinel
+    None, so the default (empty tuple) survives the apply_partial step."""
+
+    path = _write_toml(
+        tmp_path,
+        '[scope]\nexclude_paths = ["src/legacy/**"]\n',
+    )
+    p = load_partial_scope_from_toml(path)
+    assert p.stub_paths is None
 
 
 def test_load_mixed_absent_empty_populated(tmp_path: Path) -> None:
@@ -291,18 +309,36 @@ def test_apply_partial_populated_replaces_one_key() -> None:
     assert result.inline_libraries == DEFAULT_SCOPE.inline_libraries
 
 
-def test_apply_partial_replaces_all_three_keys() -> None:
-    """All three fields can be applied at once."""
+def test_apply_partial_replaces_all_four_keys() -> None:
+    """All four fields can be applied at once."""
 
     partial = PartialScope(
         exclude_paths=("a",),
         exclude_contracts=("B*",),
         inline_libraries=("forge-std",),
+        stub_paths=("src/libraries/**",),
     )
     result = apply_partial(DEFAULT_SCOPE, partial)
     assert result.exclude_paths == ("a",)
     assert result.exclude_contracts == ("B*",)
     assert result.inline_libraries == ("forge-std",)
+    assert result.stub_paths == ("src/libraries/**",)
+
+
+def test_apply_partial_stub_paths_independent() -> None:
+    """``stub_paths`` follows the same tri-state rule as the other fields:
+    absent (None) preserves base, populated replaces, empty tuple clears."""
+
+    base = Scope(stub_paths=("orig/**",))
+
+    # Absent: base survives.
+    assert apply_partial(base, PartialScope()).stub_paths == ("orig/**",)
+    # Populated: replaces.
+    assert apply_partial(base, PartialScope(stub_paths=("new/**",))).stub_paths == (
+        "new/**",
+    )
+    # Cleared: empty tuple.
+    assert apply_partial(base, PartialScope(stub_paths=())).stub_paths == ()
 
 
 def test_apply_partial_does_not_mutate_base() -> None:

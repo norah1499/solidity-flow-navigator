@@ -29,6 +29,7 @@ def _args(
     exclude_path: list[str] | None = None,
     exclude_contract: list[str] | None = None,
     inline_library: list[str] | None = None,
+    stub_path: list[str] | None = None,
     no_default_excludes: bool = False,
 ) -> argparse.Namespace:
     """Build an argparse.Namespace mirroring what ``main()``'s parser produces.
@@ -42,6 +43,7 @@ def _args(
         exclude_path=exclude_path,
         exclude_contract=exclude_contract,
         inline_library=inline_library,
+        stub_path=stub_path,
         no_default_excludes=no_default_excludes,
     )
 
@@ -71,14 +73,17 @@ def test_resolve_defaults_only(tmp_path: Path) -> None:
 
 def test_resolve_no_default_excludes_clears_two_keys(tmp_path: Path) -> None:
     """--no-default-excludes clears exclude_paths + exclude_contracts; the
-    inline_libraries default (empty tuple already) is untouched."""
+    inline_libraries and stub_paths defaults (both empty tuples already)
+    are untouched."""
 
     result = _resolve_scope(_args(no_default_excludes=True), tmp_path)
     assert result.exclude_paths == ()
     assert result.exclude_contracts == ()
-    # Verify the flag did NOT touch inline_libraries (no default to clear,
-    # so behavior is identical, but the equality check pins the intent).
+    # Verify the flag did NOT touch inline_libraries / stub_paths (no
+    # defaults to clear, so behavior is identical, but the equality check
+    # pins the intent).
     assert result.inline_libraries == DEFAULT_SCOPE.inline_libraries
+    assert result.stub_paths == DEFAULT_SCOPE.stub_paths
 
 
 # ---------------------------------------------------------------------------
@@ -309,6 +314,72 @@ def test_resolve_default_lookup_malformed_file_raises(tmp_path: Path) -> None:
     _write_toml(tmp_path, "[scope\nbroken = [")
     with pytest.raises(ConfigError):
         _resolve_scope(_args(), tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# stub_paths (v0.2)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_stub_path_cli_appends_onto_empty_default(tmp_path: Path) -> None:
+    """Default stub_paths is empty; --stub-path appends to that empty base."""
+
+    result = _resolve_scope(
+        _args(stub_path=["src/libraries/**", "src/utils/**"]),
+        tmp_path,
+    )
+    assert result.stub_paths == ("src/libraries/**", "src/utils/**")
+
+
+def test_resolve_stub_path_file_replaces_default(tmp_path: Path) -> None:
+    """A populated ``stub_paths`` in solflow.toml replaces the empty default
+    (no observable difference, but it pins the resolution path)."""
+
+    _write_toml(
+        tmp_path,
+        '[scope]\nstub_paths = ["src/libraries/**"]\n',
+    )
+    result = _resolve_scope(_args(), tmp_path)
+    assert result.stub_paths == ("src/libraries/**",)
+
+
+def test_resolve_stub_path_file_then_cli_appends(tmp_path: Path) -> None:
+    """File replaces default; CLI appends onto file value."""
+
+    _write_toml(
+        tmp_path,
+        '[scope]\nstub_paths = ["from/file/**"]\n',
+    )
+    result = _resolve_scope(
+        _args(stub_path=["from/cli/**"]),
+        tmp_path,
+    )
+    assert result.stub_paths == ("from/file/**", "from/cli/**")
+
+
+def test_resolve_no_default_excludes_does_not_clear_stub_paths(
+    tmp_path: Path,
+) -> None:
+    """Per spec §11.2: ``--no-default-excludes`` only touches exclude_paths
+    and exclude_contracts. ``stub_paths`` (like ``inline_libraries``) has no
+    default to clear — and a CLI append must still survive the flag."""
+
+    result = _resolve_scope(
+        _args(no_default_excludes=True, stub_path=["src/libraries/**"]),
+        tmp_path,
+    )
+    assert result.stub_paths == ("src/libraries/**",)
+
+
+def test_resolve_stub_path_file_empty_clears(tmp_path: Path) -> None:
+    """An explicit empty list clears (becomes ``()``); CLI appends onto that."""
+
+    _write_toml(tmp_path, "[scope]\nstub_paths = []\n")
+    result = _resolve_scope(
+        _args(stub_path=["src/libraries/**"]),
+        tmp_path,
+    )
+    assert result.stub_paths == ("src/libraries/**",)
 
 
 # ---------------------------------------------------------------------------

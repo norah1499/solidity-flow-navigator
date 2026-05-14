@@ -16,10 +16,12 @@ Discriminated FlowNode variants serialize via the ``node_type`` field
 ("function" | "unresolved" | "external"); StrEnum values (UnresolvedReason)
 serialize as their string values without a custom encoder.
 
-v0.1 adds scope-rule flags (``--exclude-path``, ``--exclude-contract``,
+v0.1 added scope-rule flags (``--exclude-path``, ``--exclude-contract``,
 ``--inline-library``, ``--no-default-excludes``, ``--config``) per spec
-§11.2. Resolution layers defaults → optional default-clear → file values →
-CLI appends; the final ``Scope`` is passed to ``build_flows``.
+§11.2. v0.2 adds ``--stub-path`` (repeatable) for compressing in-tree
+libraries — matched call targets emit ExternalNode instead of recursing
+(§11.2 / §11.8). Resolution layers defaults → optional default-clear →
+file values → CLI appends; the final ``Scope`` is passed to ``build_flows``.
 
 Exit codes:
     0  - success (server stopped cleanly, or JSON written successfully)
@@ -134,13 +136,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--stub-path",
+        action="append",
+        default=None,
+        metavar="GLOB",
+        help=(
+            "Gitignore-style glob for call targets whose bodies should NOT "
+            "be recursed into; matching targets emit ExternalNode (terminal) "
+            "instead. Used to compress dense in-tree libraries (math, utility, "
+            "etc.). Per spec §11.8, --stub-path wins over --inline-library "
+            "when both match the same path. Repeatable."
+        ),
+    )
+    parser.add_argument(
         "--no-default-excludes",
         action="store_true",
         help=(
             "Clear the built-in default exclude patterns ('**/*.t.sol', "
-            "'**/test/**', '**/tests/**' for paths and 'Mock*' for contract "
-            "names) before applying file and CLI values. Does not affect "
-            "--inline-library (no built-in defaults to clear)."
+            "'**/test/**', '**/tests/**', '**/mocks/**' for paths and "
+            "'*Mock*' for contract names) before applying file and CLI "
+            "values. Does not affect --inline-library or --stub-path "
+            "(no built-in defaults to clear)."
         ),
     )
     args = parser.parse_args(argv)
@@ -189,8 +205,8 @@ def _resolve_scope(args: argparse.Namespace, cwd: Path) -> Scope:
 
     1. Start with ``DEFAULT_SCOPE``.
     2. If ``--no-default-excludes`` is set, clear ``exclude_paths`` and
-       ``exclude_contracts`` on the base (``inline_libraries`` has no
-       defaults to clear).
+       ``exclude_contracts`` on the base (``inline_libraries`` and
+       ``stub_paths`` have no defaults to clear).
     3. If a config file is present (explicit --config or default
        ``solflow.toml`` in CWD), apply its ``PartialScope``: for each key,
        file values replace the current value when present.
@@ -212,6 +228,7 @@ def _resolve_scope(args: argparse.Namespace, cwd: Path) -> Scope:
         exclude_paths=base.exclude_paths + tuple(args.exclude_path or ()),
         exclude_contracts=base.exclude_contracts + tuple(args.exclude_contract or ()),
         inline_libraries=base.inline_libraries + tuple(args.inline_library or ()),
+        stub_paths=base.stub_paths + tuple(args.stub_path or ()),
     )
 
 
