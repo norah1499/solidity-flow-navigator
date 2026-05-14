@@ -118,7 +118,17 @@
     const wrap = el("div", "node node--external");
     const head = el("div", "node-head");
     const title = el("span", "node-title");
-    title.appendChild(el("code", null, node.target_canonical_name));
+    if (node.target_contract_name) {
+      title.appendChild(el("code", null, node.target_canonical_name));
+    } else {
+      // Free function / `using for` wrapper — no declarer contract per
+      // §11.10. target_canonical_name carries no contract prefix, so we
+      // render the bare function name and label the missing contract
+      // explicitly rather than leaving a blank slot in the title.
+      title.appendChild(el("code", null, node.target_function_name));
+      title.appendChild(document.createTextNode(" "));
+      title.appendChild(el("span", "node-no-contract", "[no contract]"));
+    }
     head.appendChild(title);
 
     const badges = el("span", "node-badges");
@@ -306,10 +316,20 @@
     resetButton.addEventListener("click", () => applyFit(true));
   }
 
-  // Re-fit on window resize so the canvas stays usable when the viewport
-  // changes; we keep the user's current zoom level by translating only.
-  window.addEventListener("resize", () => {
-    // Resize-aware refit is a future polish; for v0 we simply replay fit.
-    applyFit(false);
+  // Reset View keybindings: `0` and `r`. Suppressed when an editable
+  // element is focused so they don't hijack typing in any future
+  // input/textarea on the page.
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "0" && e.key !== "r" && e.key !== "R") return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    applyFit(true);
   });
+
+  // Preserve the user's current zoom on resize. The d3-zoom transform is
+  // applied to the inner #graph element, which is laid out in absolute
+  // coordinates — resizing the frame just changes the viewport over that
+  // content, no retransform required. The user can hit Reset View (button
+  // or `0`/`r`) to recentre if they want fit-to-frame back.
 })();

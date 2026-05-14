@@ -232,15 +232,34 @@ code, pre { font-family: var(--font-mono); }
 .flow-subtitle code { font-size: 11px; }
 
 /* ----- graph frame (dagre layout + d3-zoom pan/zoom) -------------------- */
+/* The flow page uses a flex column so #graph-frame fills the viewport
+   minus the actual chrome height (header + flow-header + nav), regardless
+   of wrap. Previously we approximated chrome with calc(100vh - 150px),
+   which shortened the canvas whenever the flow-header wrapped. */
 
-.site-main:has(#graph-frame) { max-width: none; padding: 0; }
+body.flow-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+body.flow-page .site-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-width: none;
+  padding: 0;
+}
+body.flow-page .flow-nav,
+body.flow-page .flow-header {
+  flex: 0 0 auto;
+}
 
 #graph-frame {
   position: relative;
-  width: 100vw;
-  /* Top chrome (header + flow-header + back-link + margins) is roughly
-     150px on a default viewport; reserve everything below it. */
-  height: calc(100vh - 150px);
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: hidden;
   background: var(--bg-page);
   border-top: 0.5px solid var(--border-soft);
@@ -397,6 +416,13 @@ code, pre { font-family: var(--font-mono); }
 }
 
 .node-path { font-family: var(--font-mono); font-size: 11px; }
+
+.node-no-contract {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-weight: 400;
+}
 
 /* ----- Pygments token overrides ----------------------------------------- */
 /* Sit on top of pygments.css; selectors share specificity (.src .x), so
