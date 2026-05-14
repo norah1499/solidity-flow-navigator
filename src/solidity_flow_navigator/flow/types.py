@@ -28,6 +28,7 @@ class UnresolvedReason(StrEnum):
     INTERFACE_CALL_NO_BINDING = "interface_call_no_binding"  # §13.1
     LOW_LEVEL_CALL = "low_level_call"  # §13.3 Solidity-level
     YUL_DYNAMIC_DISPATCH = "yul_dynamic_dispatch"  # §13.3 Yul-level
+    ABSTRACT_NO_IMPLEMENTATION = "abstract_no_implementation"  # §11.5 (v0.3)
 
 
 @dataclass(frozen=True, slots=True)

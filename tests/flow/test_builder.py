@@ -638,6 +638,7 @@ def _synthetic_facts_with_lib_call():
         is_receive=False,
         is_modifier=False,
         is_implemented=True,
+        is_virtual=False,
         is_entry_point=False,
         payable=False,
         view=False,
@@ -670,6 +671,7 @@ def _synthetic_facts_with_lib_call():
         is_receive=False,
         is_modifier=False,
         is_implemented=True,
+        is_virtual=False,
         is_entry_point=True,
         payable=False,
         view=False,
@@ -800,6 +802,7 @@ def _synthetic_facts_with_in_tree_lib_call():
         is_receive=False,
         is_modifier=False,
         is_implemented=True,
+        is_virtual=False,
         is_entry_point=False,
         payable=False,
         view=False,
@@ -831,6 +834,7 @@ def _synthetic_facts_with_in_tree_lib_call():
         is_receive=False,
         is_modifier=False,
         is_implemented=True,
+        is_virtual=False,
         is_entry_point=True,
         payable=False,
         view=False,
@@ -943,3 +947,1038 @@ def test_stub_paths_wins_over_inline_libraries_conflict_rule() -> None:
         f"got {type(child).__name__}"
     )
     assert child.source_path == "lib/widget/Lib.sol"
+
+
+# ---------------------------------------------------------------------------
+# 14. v0.3 stage 2: within-body virtual dispatch for kind="internal" calls
+#     (spec §11.5). The Flow's invoker contract re-resolves a virtual call's
+#     lexical target through its C3 chain.
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_facts_virtual_internal(
+    *,
+    base_update_virtual: bool,
+    derived_overrides_update: bool,
+    base_update_implemented: bool = True,
+):
+    """Build a tiny RepoFacts mimicking the SablierLockup shape:
+
+    ``Base.transferFrom() internal`` (the entry-point body, inherited)
+    calls ``_update()`` (internal). ``Base._update()`` may be virtual.
+    ``Derived`` inherits Base and optionally overrides ``_update()``.
+
+    The Flow rooted at Derived.transferFrom should re-resolve ``_update``
+    through Derived's chain when the lexical target is virtual.
+    """
+
+    from solidity_flow_navigator.analysis.types import (
+        CallEdge,
+        Contract,
+        Function,
+        RepoFacts,
+    )
+
+    base_update = Function(
+        canonical_name="Base._update()",
+        name="_update",
+        full_name="_update()",
+        contract_declarer_name="Base",
+        visibility="internal",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=base_update_implemented,
+        is_virtual=base_update_virtual,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/Base.sol"),
+        source_code="function _update() internal virtual {}",
+        calls=(),
+    )
+    update_call_in_transfer = CallEdge(
+        kind="internal",
+        subkind=None,
+        target_canonical_name="Base._update()",
+        target_function_name="_update",
+        target_contract_name="Base",
+        is_resolved=True,
+        source_location=_sl("src/Base.sol"),
+    )
+    transfer_from = Function(
+        canonical_name="Base.transferFrom()",
+        name="transferFrom",
+        full_name="transferFrom()",
+        contract_declarer_name="Base",
+        visibility="public",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/Base.sol"),
+        source_code="function transferFrom() public { _update(); }",
+        calls=(update_call_in_transfer,),
+    )
+    base_functions: tuple[Function, ...] = (transfer_from, base_update)
+
+    derived_functions: tuple[Function, ...] = ()
+    if derived_overrides_update:
+        derived_update = Function(
+            canonical_name="Derived._update()",
+            name="_update",
+            full_name="_update()",
+            contract_declarer_name="Derived",
+            visibility="internal",
+            is_constructor=False,
+            is_fallback=False,
+            is_receive=False,
+            is_modifier=False,
+            is_implemented=True,
+            is_virtual=False,
+            is_entry_point=False,
+            payable=False,
+            view=False,
+            pure=False,
+            parameters=(),
+            returns=(),
+            modifier_names=(),
+            source_location=_sl("src/Derived.sol"),
+            source_code="function _update() internal override {}",
+            calls=(),
+        )
+        derived_functions = (derived_update,)
+
+    base = Contract(
+        name="Base",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl("src/Base.sol"),
+        functions=base_functions,
+        modifiers=(),
+    )
+    derived = Contract(
+        name="Derived",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=("Base",),
+        immediate_base_contract_names=("Base",),
+        source_location=_sl("src/Derived.sol"),
+        functions=derived_functions,
+        modifiers=(),
+    )
+    return RepoFacts(repo_path="/abs", contracts=(base, derived), free_functions=())
+
+
+def _derived_transfer_from_flow(facts):
+    """Return the Flow rooted at Derived.transferFrom (the SablierLockup-
+    shape inherited entry point) under no-op scope."""
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    flows = build_flows(facts, Scope())
+    return _flow_by_entry_point(flows, "Derived", "transferFrom()")
+
+
+def test_internal_virtual_call_resolves_to_override() -> None:
+    """Derived inherits Base.transferFrom; Base._update() is virtual and
+    Derived overrides it. The Flow rooted at Derived.transferFrom must
+    show the call as recursing into Derived._update, not Base._update —
+    this is the SablierLockup shape from the v0.3 motivating finding.
+    """
+
+    facts = _synthetic_facts_virtual_internal(
+        base_update_virtual=True, derived_overrides_update=True
+    )
+    flow = _derived_transfer_from_flow(facts)
+    assert len(flow.root.children) == 1
+    child = flow.root.children[0]
+    assert isinstance(child, FunctionNode), (
+        f"expected internal call to recurse to FunctionNode, got "
+        f"{type(child).__name__}"
+    )
+    assert child.canonical_name == "Derived._update()", (
+        f"virtual call should resolve through Derived's chain to "
+        f"Derived._update(), got {child.canonical_name!r}"
+    )
+    assert child.declarer_contract_name == "Derived"
+
+
+def test_internal_virtual_call_no_override_resolves_to_lexical_target() -> None:
+    """Base._update() is virtual but Derived does NOT override it.
+    Resolution returns Base._update — same target as before v0.3, no
+    regression for non-overridden virtual calls.
+    """
+
+    facts = _synthetic_facts_virtual_internal(
+        base_update_virtual=True, derived_overrides_update=False
+    )
+    flow = _derived_transfer_from_flow(facts)
+    child = flow.root.children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.canonical_name == "Base._update()"
+    assert child.declarer_contract_name == "Base"
+
+
+def test_internal_non_virtual_call_unchanged_behavior() -> None:
+    """Base._update() is NOT virtual; even if Derived has a same-named
+    function, virtual dispatch must not fire. (In real Solidity this
+    would be a compile error — Derived._update without override is
+    illegal — but the helper's fast-path is what we're testing.)
+    """
+
+    facts = _synthetic_facts_virtual_internal(
+        base_update_virtual=False, derived_overrides_update=True
+    )
+    flow = _derived_transfer_from_flow(facts)
+    child = flow.root.children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.canonical_name == "Base._update()", (
+        f"non-virtual lexical target should pass through unchanged, got "
+        f"{child.canonical_name!r}"
+    )
+
+
+def test_internal_virtual_abstract_no_impl_emits_unresolved() -> None:
+    """Base._update() is virtual AND not implemented (e.g. an abstract
+    declaration), Derived doesn't implement either. Layer 2 emits an
+    UnresolvedNode with reason ABSTRACT_NO_IMPLEMENTATION.
+    """
+
+    facts = _synthetic_facts_virtual_internal(
+        base_update_virtual=True,
+        base_update_implemented=False,
+        derived_overrides_update=False,
+    )
+    flow = _derived_transfer_from_flow(facts)
+    child = flow.root.children[0]
+    assert isinstance(
+        child, UnresolvedNode
+    ), f"expected UnresolvedNode, got {type(child).__name__}"
+    assert child.reason is UnresolvedReason.ABSTRACT_NO_IMPLEMENTATION
+    assert child.raw_kind == "internal"
+    assert child.children == () if hasattr(child, "children") else True
+
+
+def test_invoked_via_constant_across_flow() -> None:
+    """Every FunctionNode in a Flow carries the same
+    ``invoked_via_contract_name`` value — the entry-point invoker
+    contract — per spec §11.3 v0.3. Walks a multi-level tree built from
+    Derived.transferFrom and asserts the invariant on every node.
+    """
+
+    facts = _synthetic_facts_virtual_internal(
+        base_update_virtual=True, derived_overrides_update=True
+    )
+    flow = _derived_transfer_from_flow(facts)
+
+    invokers: list[str] = []
+    for node in _walk(flow.root):
+        if isinstance(node, FunctionNode):
+            invokers.append(node.invoked_via_contract_name)
+    assert set(invokers) == {
+        "Derived"
+    }, f"expected invoked_via_contract_name to be 'Derived' everywhere, got {invokers}"
+
+
+def test_library_call_skips_virtual_dispatch() -> None:
+    """Library calls are kind=\"library\" and must not flow through
+    ``resolve_virtual_override``. Libraries don't participate in
+    inheritance; the call resolves to the lexical target unchanged.
+    Verified by ensuring the synthetic-library tests at sections 12-13
+    still pass (this is a sentinel — no regression suite needed here).
+    """
+
+    # Sentinel: explicitly construct a library-kind synthetic and verify
+    # the resulting FunctionNode is the lexical target.
+    facts = _synthetic_facts_with_lib_call()
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    flows = build_flows(facts, Scope(inline_libraries=("widget",)))
+    child = flows[0].root.children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.canonical_name == "Lib.helper()"
+
+
+def test_super_call_bypasses_virtual_dispatch() -> None:
+    """A super.X() call's lexical target is Base.X(); even though
+    Derived has its own X(), the super-call detection bypasses virtual
+    dispatch (spec §11.5). Result: the FunctionNode is Base.X, with
+    ``invoked_via_super=True``.
+    """
+
+    from solidity_flow_navigator.analysis.types import (
+        CallEdge,
+        Contract,
+        Function,
+        RepoFacts,
+    )
+
+    base_foo = Function(
+        canonical_name="Base.foo()",
+        name="foo",
+        full_name="foo()",
+        contract_declarer_name="Base",
+        visibility="internal",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=True,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/Base.sol"),
+        source_code="function foo() internal virtual {}",
+        calls=(),
+    )
+    # Derived.foo() body contains `super.foo()` — Slither reports as
+    # kind="internal" with target=Base.foo.
+    super_call = CallEdge(
+        kind="internal",
+        subkind=None,
+        target_canonical_name="Base.foo()",
+        target_function_name="foo",
+        target_contract_name="Base",
+        is_resolved=True,
+        source_location=_sl("src/Derived.sol"),
+    )
+    derived_foo = Function(
+        canonical_name="Derived.foo()",
+        name="foo",
+        full_name="foo()",
+        contract_declarer_name="Derived",
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/Derived.sol"),
+        source_code="function foo() external override { super.foo(); }",
+        calls=(super_call,),
+    )
+    base = Contract(
+        name="Base",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl("src/Base.sol"),
+        functions=(base_foo,),
+        modifiers=(),
+    )
+    derived = Contract(
+        name="Derived",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=("Base",),
+        immediate_base_contract_names=("Base",),
+        source_location=_sl("src/Derived.sol"),
+        functions=(derived_foo,),
+        modifiers=(),
+    )
+    facts = RepoFacts(repo_path="/abs", contracts=(base, derived), free_functions=())
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    flows = build_flows(facts, Scope())
+    flow = _flow_by_entry_point(flows, "Derived", "foo()")
+    child = flow.root.children[0]
+    assert isinstance(child, FunctionNode)
+    # Critical: virtual dispatch did NOT fire — child is Base.foo, not
+    # Derived.foo (which would create an infinite loop and be wrong).
+    assert child.canonical_name == "Base.foo()", (
+        f"super call should resolve to Base.foo (lexical target), got "
+        f"{child.canonical_name!r}"
+    )
+    assert child.invoked_via_super is True
+    assert child.invoked_via_contract_name == "Derived"
+
+
+# ---------------------------------------------------------------------------
+# 15. v0.3 stage 3: high_level self-call virtual dispatch (spec §11.5)
+# ---------------------------------------------------------------------------
+
+
+def _self_call_facts(
+    *,
+    derived_overrides_bar: bool,
+    bar_virtual: bool = True,
+    bar_implemented: bool = True,
+):
+    """Build a fact tree where Derived.foo() does ``this.bar()`` and bar is
+    declared on Derived (so Slither's bound target is Derived.bar). When
+    Derived inherits bar virtually from an ancestor that has the impl,
+    the binding still points to whichever contract's chain Slither picked.
+
+    Two specific shapes are needed for stage-3 coverage:
+    - Self-call where Derived.bar IS declared on Derived → virtual
+      dispatch is a no-op (Derived is most-derived). Sanity check.
+    - Self-call where Derived inherits bar from Base, lexical target is
+      Base.bar with target.contract != invoker — that path is
+      cross-contract-shaped per the spec's literal reading and does NOT
+      trigger virtual dispatch (handled by the negative test).
+    """
+
+    from solidity_flow_navigator.analysis.types import (
+        CallEdge,
+        Contract,
+        Function,
+        RepoFacts,
+    )
+
+    base_bar = Function(
+        canonical_name="Base.bar()",
+        name="bar",
+        full_name="bar()",
+        contract_declarer_name="Base",
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=bar_implemented,
+        is_virtual=bar_virtual,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/Base.sol"),
+        source_code="function bar() external virtual {}",
+        calls=(),
+    )
+    # Slither binds the self-call to Derived.bar (the most-derived in
+    # Derived's chain) when Derived has its own bar; to Base.bar otherwise.
+    bound_target_canonical = "Derived.bar()" if derived_overrides_bar else "Base.bar()"
+    self_call = CallEdge(
+        kind="high_level",
+        subkind=None,
+        target_canonical_name=bound_target_canonical,
+        target_function_name="bar",
+        target_contract_name="Derived" if derived_overrides_bar else "Base",
+        is_resolved=True,
+        source_location=_sl("src/Derived.sol"),
+    )
+    derived_foo = Function(
+        canonical_name="Derived.foo()",
+        name="foo",
+        full_name="foo()",
+        contract_declarer_name="Derived",
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/Derived.sol"),
+        source_code="function foo() external { this.bar(); }",
+        calls=(self_call,),
+    )
+    derived_functions: tuple[Function, ...] = (derived_foo,)
+    if derived_overrides_bar:
+        derived_bar = Function(
+            canonical_name="Derived.bar()",
+            name="bar",
+            full_name="bar()",
+            contract_declarer_name="Derived",
+            visibility="external",
+            is_constructor=False,
+            is_fallback=False,
+            is_receive=False,
+            is_modifier=False,
+            is_implemented=True,
+            is_virtual=False,
+            is_entry_point=True,
+            payable=False,
+            view=False,
+            pure=False,
+            parameters=(),
+            returns=(),
+            modifier_names=(),
+            source_location=_sl("src/Derived.sol"),
+            source_code="function bar() external override {}",
+            calls=(),
+        )
+        derived_functions = (derived_foo, derived_bar)
+    base = Contract(
+        name="Base",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl("src/Base.sol"),
+        functions=(base_bar,),
+        modifiers=(),
+    )
+    derived = Contract(
+        name="Derived",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=("Base",),
+        immediate_base_contract_names=("Base",),
+        source_location=_sl("src/Derived.sol"),
+        functions=derived_functions,
+        modifiers=(),
+    )
+    return RepoFacts(repo_path="/abs", contracts=(base, derived), free_functions=())
+
+
+def test_high_level_self_call_virtual_dispatch_no_op_when_derived_has_impl() -> None:
+    """Self-call where Slither bound target = Derived.bar AND
+    Derived.bar is itself an implementation. Virtual dispatch walks
+    Derived's chain (most-derived first) and resolves to Derived.bar —
+    a no-op vs the bound target. Confirms the path is exercised without
+    surprises.
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _self_call_facts(derived_overrides_bar=True)
+    flows = build_flows(facts, Scope())
+    foo_flow = _flow_by_entry_point(flows, "Derived", "foo()")
+    child = foo_flow.root.children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.canonical_name == "Derived.bar()"
+    assert child.invoked_via_contract_name == "Derived"
+
+
+def test_high_level_cross_contract_call_skips_virtual_dispatch() -> None:
+    """Self-call where Slither bound target = Base.bar (Derived doesn't
+    override). The bound target's contract is Base != invoker Derived,
+    so per the literal §11.5 rule virtual dispatch does NOT fire — the
+    cross-contract path emits a FunctionNode for Base.bar.
+
+    This case captures the spec's distinction: \"high_level when the
+    bound target's contract is C itself\" is the trigger; anything else
+    is a cross-contract boundary.
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _self_call_facts(derived_overrides_bar=False)
+    flows = build_flows(facts, Scope())
+    foo_flow = _flow_by_entry_point(flows, "Derived", "foo()")
+    child = foo_flow.root.children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.canonical_name == "Base.bar()"
+
+
+def test_high_level_self_call_abstract_emits_unresolved() -> None:
+    """Self-call to a virtual function declared on the invoker itself but
+    not implemented anywhere in the invoker's chain. Emits
+    ABSTRACT_NO_IMPLEMENTATION.
+    """
+
+    from solidity_flow_navigator.analysis.types import (
+        CallEdge,
+        Contract,
+        Function,
+        RepoFacts,
+    )
+
+    inv_bar = Function(
+        canonical_name="Inv.bar()",
+        name="bar",
+        full_name="bar()",
+        contract_declarer_name="Inv",
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=False,  # abstract on the invoker itself
+        is_virtual=True,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/Inv.sol"),
+        source_code="function bar() external virtual;",
+        calls=(),
+    )
+    call = CallEdge(
+        kind="high_level",
+        subkind=None,
+        target_canonical_name="Inv.bar()",
+        target_function_name="bar",
+        target_contract_name="Inv",
+        is_resolved=True,
+        source_location=_sl("src/Inv.sol"),
+    )
+    foo = Function(
+        canonical_name="Inv.foo()",
+        name="foo",
+        full_name="foo()",
+        contract_declarer_name="Inv",
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/Inv.sol"),
+        source_code="function foo() external { this.bar(); }",
+        calls=(call,),
+    )
+    inv = Contract(
+        name="Inv",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=True,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl("src/Inv.sol"),
+        functions=(foo, inv_bar),
+        modifiers=(),
+    )
+    facts = RepoFacts(repo_path="/abs", contracts=(inv,), free_functions=())
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    flows = build_flows(facts, Scope())
+    foo_flow = _flow_by_entry_point(flows, "Inv", "foo()")
+    child = foo_flow.root.children[0]
+    assert isinstance(child, UnresolvedNode)
+    assert child.reason is UnresolvedReason.ABSTRACT_NO_IMPLEMENTATION
+    assert child.raw_kind == "high_level"
+
+
+# ---------------------------------------------------------------------------
+# 16. v0.3 stage 3: modifier virtual dispatch (spec §11.5 + §11.6)
+# ---------------------------------------------------------------------------
+
+
+def _facts_with_modifier(
+    *,
+    base_mod_virtual: bool,
+    derived_overrides_mod: bool,
+    base_mod_implemented: bool = True,
+):
+    """Build a fact tree where Base.foo() is decorated by a guard modifier
+    declared on Base (possibly virtual), and Derived inherits Base.foo
+    optionally with a modifier override.
+    """
+
+    from solidity_flow_navigator.analysis.types import (
+        Contract,
+        Function,
+        RepoFacts,
+    )
+
+    base_mod = Function(
+        canonical_name="Base.guard()",
+        name="guard",
+        full_name="guard()",
+        contract_declarer_name="Base",
+        visibility="internal",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=True,
+        is_implemented=base_mod_implemented,
+        is_virtual=base_mod_virtual,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/Base.sol"),
+        source_code="modifier guard() virtual { _; }",
+        calls=(),
+    )
+    base_foo = Function(
+        canonical_name="Base.foo()",
+        name="foo",
+        full_name="foo()",
+        contract_declarer_name="Base",
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=("guard",),
+        source_location=_sl("src/Base.sol"),
+        source_code="function foo() external guard {}",
+        calls=(),
+    )
+    base = Contract(
+        name="Base",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl("src/Base.sol"),
+        functions=(base_foo,),
+        modifiers=(base_mod,),
+    )
+    derived_modifiers: tuple[Function, ...] = ()
+    if derived_overrides_mod:
+        derived_mod = Function(
+            canonical_name="Derived.guard()",
+            name="guard",
+            full_name="guard()",
+            contract_declarer_name="Derived",
+            visibility="internal",
+            is_constructor=False,
+            is_fallback=False,
+            is_receive=False,
+            is_modifier=True,
+            is_implemented=True,
+            is_virtual=False,
+            is_entry_point=False,
+            payable=False,
+            view=False,
+            pure=False,
+            parameters=(),
+            returns=(),
+            modifier_names=(),
+            source_location=_sl("src/Derived.sol"),
+            source_code="modifier guard() override { _; }",
+            calls=(),
+        )
+        derived_modifiers = (derived_mod,)
+    derived = Contract(
+        name="Derived",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=("Base",),
+        immediate_base_contract_names=("Base",),
+        source_location=_sl("src/Derived.sol"),
+        functions=(),
+        modifiers=derived_modifiers,
+    )
+    return RepoFacts(repo_path="/abs", contracts=(base, derived), free_functions=())
+
+
+def test_virtual_modifier_resolves_to_override_on_invoker() -> None:
+    """Base.guard is virtual; Derived overrides. Flow rooted at
+    Derived.foo (inherited from Base) shows the modifier as
+    Derived.guard, not Base.guard — Solidity's modifier override
+    semantics rendered correctly.
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _facts_with_modifier(base_mod_virtual=True, derived_overrides_mod=True)
+    flows = build_flows(facts, Scope())
+    flow = _flow_by_entry_point(flows, "Derived", "foo()")
+    # First child is the modifier
+    mod_child = flow.root.children[0]
+    assert isinstance(mod_child, FunctionNode)
+    assert mod_child.is_modifier
+    assert (
+        mod_child.canonical_name == "Derived.guard()"
+    ), f"expected Derived.guard (override), got {mod_child.canonical_name!r}"
+    assert mod_child.invoked_via_contract_name == "Derived"
+
+
+def test_virtual_modifier_no_override_resolves_to_base() -> None:
+    """Base.guard is virtual but Derived does NOT override. Modifier
+    resolves to Base.guard (unchanged behavior).
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _facts_with_modifier(base_mod_virtual=True, derived_overrides_mod=False)
+    flows = build_flows(facts, Scope())
+    flow = _flow_by_entry_point(flows, "Derived", "foo()")
+    mod_child = flow.root.children[0]
+    assert isinstance(mod_child, FunctionNode)
+    assert mod_child.canonical_name == "Base.guard()"
+
+
+def test_non_virtual_modifier_unchanged_behavior() -> None:
+    """Base.guard is NOT virtual; the helper's fast-path returns it
+    unchanged, even if a same-named modifier exists on Derived (which
+    in real Solidity would not compile without virtual/override).
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _facts_with_modifier(base_mod_virtual=False, derived_overrides_mod=True)
+    flows = build_flows(facts, Scope())
+    flow = _flow_by_entry_point(flows, "Derived", "foo()")
+    mod_child = flow.root.children[0]
+    assert isinstance(mod_child, FunctionNode)
+    assert mod_child.canonical_name == "Base.guard()"
+
+
+def test_virtual_modifier_abstract_no_impl_emits_unresolved() -> None:
+    """Virtual modifier with no implementation in invoker's chain →
+    UnresolvedNode with ABSTRACT_NO_IMPLEMENTATION, raw_kind=\"modifier\".
+    """
+
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    facts = _facts_with_modifier(
+        base_mod_virtual=True,
+        base_mod_implemented=False,
+        derived_overrides_mod=False,
+    )
+    flows = build_flows(facts, Scope())
+    flow = _flow_by_entry_point(flows, "Derived", "foo()")
+    mod_child = flow.root.children[0]
+    assert isinstance(mod_child, UnresolvedNode)
+    assert mod_child.reason is UnresolvedReason.ABSTRACT_NO_IMPLEMENTATION
+    assert mod_child.raw_kind == "modifier"
+
+
+# ---------------------------------------------------------------------------
+# 17. Sablier-shape sanity check: synthetic three-contract chain mirroring
+#     SablierLockup → SablierLockupBase → ERC721, where transferFrom is
+#     inherited and calls _update virtually.
+# ---------------------------------------------------------------------------
+
+
+def test_sablier_shape_three_contract_chain_resolves_to_mid() -> None:
+    """Three-contract chain mirroring the v0.3 motivating finding:
+
+        ERC721 (lib/openzeppelin)  has transferFrom + virtual _update body
+        SablierLockupBase (src/)   overrides _update (most-derived impl)
+        SablierLockup (src/)       leaf — does NOT override _update
+
+    Flow rooted at SablierLockup.transferFrom must show the _update call
+    recursing into SablierLockupBase._update, not ERC721._update. Verifies
+    end-to-end:
+      - virtual dispatch fires on inherited transferFrom's body
+      - C3 walk descends the chain in most-derived order
+      - the resolved override's filename is NOT under lib/ so the
+        external-vs-recurse check (which now runs post-resolution)
+        recurses correctly
+    """
+
+    from solidity_flow_navigator.analysis.types import (
+        CallEdge,
+        Contract,
+        Function,
+        RepoFacts,
+    )
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    erc721_update = Function(
+        canonical_name="ERC721._update()",
+        name="_update",
+        full_name="_update()",
+        contract_declarer_name="ERC721",
+        visibility="internal",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=True,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("lib/openzeppelin/ERC721.sol"),
+        source_code="function _update() internal virtual {}",
+        calls=(),
+    )
+    update_in_transfer = CallEdge(
+        kind="internal",
+        subkind=None,
+        target_canonical_name="ERC721._update()",
+        target_function_name="_update",
+        target_contract_name="ERC721",
+        is_resolved=True,
+        source_location=_sl("lib/openzeppelin/ERC721.sol"),
+    )
+    erc721_transfer = Function(
+        canonical_name="ERC721.transferFrom()",
+        name="transferFrom",
+        full_name="transferFrom()",
+        contract_declarer_name="ERC721",
+        visibility="public",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("lib/openzeppelin/ERC721.sol"),
+        source_code="function transferFrom() public { _update(); }",
+        calls=(update_in_transfer,),
+    )
+
+    base_update = Function(
+        canonical_name="SablierLockupBase._update()",
+        name="_update",
+        full_name="_update()",
+        contract_declarer_name="SablierLockupBase",
+        visibility="internal",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=True,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl("src/SablierLockupBase.sol"),
+        source_code="function _update() internal override virtual {}",
+        calls=(),
+    )
+
+    erc721 = Contract(
+        name="ERC721",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl("lib/openzeppelin/ERC721.sol"),
+        functions=(erc721_transfer, erc721_update),
+        modifiers=(),
+    )
+    base = Contract(
+        name="SablierLockupBase",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=("ERC721",),
+        immediate_base_contract_names=("ERC721",),
+        source_location=_sl("src/SablierLockupBase.sol"),
+        functions=(base_update,),
+        modifiers=(),
+    )
+    leaf = Contract(
+        name="SablierLockup",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=("SablierLockupBase", "ERC721"),
+        immediate_base_contract_names=("SablierLockupBase",),
+        source_location=_sl("src/SablierLockup.sol"),
+        functions=(),
+        modifiers=(),
+    )
+    facts = RepoFacts(
+        repo_path="/abs", contracts=(erc721, base, leaf), free_functions=()
+    )
+
+    flows = build_flows(facts, Scope())
+    flow = _flow_by_entry_point(flows, "SablierLockup", "transferFrom()")
+    # transferFrom's body has one child — the _update call. v0.3 must
+    # resolve it to SablierLockupBase._update (mid-chain override).
+    children = flow.root.children
+    assert len(children) == 1
+    child = children[0]
+    assert isinstance(child, FunctionNode), (
+        f"expected FunctionNode (in-tree override resolution), got "
+        f"{type(child).__name__}; lib/-stub regression would surface here"
+    )
+    assert child.canonical_name == "SablierLockupBase._update()", (
+        f"virtual dispatch should resolve to SablierLockupBase._update, "
+        f"got {child.canonical_name!r}"
+    )
+    assert child.declarer_contract_name == "SablierLockupBase"
+    assert child.invoked_via_contract_name == "SablierLockup"

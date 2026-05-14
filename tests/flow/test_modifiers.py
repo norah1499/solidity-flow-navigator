@@ -144,6 +144,7 @@ def _make_function(
         is_receive=False,
         is_modifier=is_modifier,
         is_implemented=True,
+        is_virtual=False,
         is_entry_point=False,
         payable=False,
         view=False,

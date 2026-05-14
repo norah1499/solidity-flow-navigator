@@ -108,6 +108,12 @@ class Function:
     is_receive: bool
     is_modifier: bool
     is_implemented: bool  # False for interface/abstract declarations
+    # True if the function carries Solidity's ``virtual`` keyword and may be
+    # overridden by a derived contract. Modifiers can also be ``virtual``.
+    # Layer 2 uses this to decide whether to re-resolve a call's target
+    # through the Flow's invoker contract's C3 chain (§11.5 within-body
+    # virtual dispatch); non-virtual targets pass through unchanged.
+    is_virtual: bool
     # external/public on a non-interface non-library declarer, OR receive/fallback.
     # Layer 2 still walks inheritance to enumerate per-contract entry points
     # (incl. inherited).
