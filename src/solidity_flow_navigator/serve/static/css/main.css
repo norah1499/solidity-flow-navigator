@@ -208,13 +208,35 @@ code, pre { font-family: var(--font-mono); }
 
 /* ----- flow page (Stage 1 placeholder) ----------------------------------- */
 
-.flow-nav { margin-bottom: 1rem; }
+/* v0.6: `.flow-nav` is viewport-fixed (top-left) so the `← index` button
+   stays visible regardless of canvas pan/zoom state. Previously it sat in
+   document flow at the top of `.site-main`; on wide canvases (notably Aave
+   V3 `Pool.executeLiquidationCall`) horizontal scroll moved it off-screen,
+   leaving the auditor stranded without a back affordance. Position is
+   below `.site-header` (~3rem tall) with a small inset so it doesn't
+   collide with the page chrome above. z-index sits above `#graph` so it
+   floats over any node that happens to land in that corner. */
+.flow-nav {
+  position: fixed;
+  top: 3.5rem;
+  left: 1rem;
+  z-index: 10;
+  margin: 0;
+}
 .back-link {
   font-size: 12px;
   color: var(--fg-muted);
   text-decoration: none;
+  background: var(--bg-surface);
+  border: 0.5px solid var(--border-soft);
+  border-radius: 2px;
+  padding: 0.3rem 0.6rem;
+  display: inline-block;
 }
-.back-link:hover { color: var(--fg-text); }
+.back-link:hover {
+  color: var(--fg-text);
+  border-color: var(--border-strong);
+}
 
 .flow-header { margin: 0 0 1.5rem; }
 .flow-title {

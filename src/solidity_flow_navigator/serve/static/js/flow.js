@@ -111,6 +111,16 @@
     return e;
   }
 
+  // v0.6 short-form titles (spec §10.2 "Node title display"). Strip the
+  // parameter type list from a canonical function signature and replace it
+  // with `(...)`. Mirrors the same helper in flow-progressive.js.
+  function shortenSignature(name) {
+    if (typeof name !== "string") return name;
+    const i = name.indexOf("(");
+    if (i === -1) return name;
+    return name.slice(0, i) + "(...)";
+  }
+
   // Wrap each source-code line in `<span class="src-line" data-line=i>` so
   // we can compute the Y of any line within a rendered node — used by edge
   // anchoring (per-line origination). Mirrors the per-line wrapping in
@@ -132,7 +142,13 @@
       "node node--function" + (node.is_modifier ? " node--modifier" : ""),
     );
     const head = el("div", "node-head");
-    head.appendChild(el("span", "node-title", node.invoked_via_contract_name + "." + node.full_name));
+    head.appendChild(
+      el(
+        "span",
+        "node-title",
+        node.invoked_via_contract_name + "." + shortenSignature(node.full_name),
+      ),
+    );
 
     const badges = el("span", "node-badges");
     if (node.is_modifier) badges.appendChild(el("span", "badge badge-modifier", "modifier"));
