@@ -227,6 +227,17 @@ def create_app(
     def _inject_globals() -> dict[str, Any]:
         return {"repo_path": facts.repo_path, "legacy_renderer": legacy}
 
+    # solflow is a localhost dev tool; an auditor swapping a JS/CSS file mid-
+    # session (or rerunning the CLI after a code change) must see the new
+    # bytes on the next reload, not Chrome's cached copy. Blanket no-store on
+    # every response is simpler and safer than scoping to /static/* — none of
+    # solflow's responses benefit from caching anyway (HTML embeds the Flow
+    # data inline; JS/CSS change with every release).
+    @app.after_request
+    def _no_cache(response):  # type: ignore[no-untyped-def]
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.route("/")
     def index() -> str:
         return render_template(
