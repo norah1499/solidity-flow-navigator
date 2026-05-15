@@ -599,7 +599,7 @@
       });
     });
 
-    // v0.5.1: left-side modifier-overlap shift.
+    // v0.5.1 / v0.5.2: left-side modifier-overlap shift.
     //
     // Modifiers are placed manually at upper-left of their parent, stacked
     // downward from parent.top. Dagre, however, places left-side body-call
@@ -609,12 +609,28 @@
     // demonstrated this: the noDelegateCall modifier disappears behind the
     // left child).
     //
-    // Fix: when a parent has BOTH visible modifiers AND left-side dagre
-    // children, shift the entire left-side subtree DOWN by the parent's
-    // modifier-zone height + a gap. The shift cascades through ancestors:
-    // if grandparent G shifts P's left subtree by S_G, and P itself has
-    // modifiers and left-side children, P's left subtree shifts by
-    // S_G + (P's modifier zone + gap). Right-side subtrees are untouched.
+    // Fix: when a parent has visible modifiers and a left-side dagre child,
+    // shift the child DOWN by exactly enough to clear the parent's modifier
+    // zone — the per-node minimum-clear delta:
+    //
+    //     extra = max(0, parent.top + parent_modifier_zone + GAP - child.top)
+    //
+    // where parent.top and child.top are dagre's pre-shift Y of the top
+    // edges (n.y - n.height/2). The parent-shift baseline cancels: with
+    // childShift = parentShift + extra, the post-shift child.top is
+    //     child_dagre_top + parentShift + extra
+    //   ≥ parent_dagre_top + parentShift + parent_modifier_zone + GAP
+    //   = parent_post_shift_top + parent_modifier_zone + GAP
+    // so the child always clears the modifier zone, regardless of how
+    // dagre's vertical centring places a tall child's top relative to the
+    // parent's top. v0.5.1 used a fixed `parent_modifier_zone + GAP` extra,
+    // which baked in the false assumption that dagre never places a left
+    // child's top above the parent's top — broken for tall children (Morpho
+    // borrow has examples). The cascade composes identically: descendants
+    // inherit parentShift and add their own per-node extra.
+    //
+    // Right-side subtrees are untouched (extra = 0 for side === "right";
+    // the modifier zone is upper-left, no overlap on the right).
     const modZoneByParent = new Map(); // pid -> total stacked modifier height
     modifiersByParent.forEach((modIds, pid) => {
       let total = 0;
@@ -635,8 +651,16 @@
         const parentShift = shiftById.get(pid) || 0;
         const side = sideById.get(id);
         const parentZone = modZoneByParent.get(pid) || 0;
-        const extra =
-          side === "left" && parentZone > 0 ? parentZone + MODIFIER_GAP_Y : 0;
+        let extra = 0;
+        if (side === "left" && parentZone > 0) {
+          const parentDagre = g.node(pid);
+          const childDagre = g.node(id);
+          if (parentDagre && childDagre) {
+            const parentTop = parentDagre.y - parentDagre.height / 2;
+            const childTop = childDagre.y - childDagre.height / 2;
+            extra = Math.max(0, parentTop + parentZone + MODIFIER_GAP_Y - childTop);
+          }
+        }
         nodeShift = parentShift + extra;
       }
       shiftById.set(id, nodeShift);
