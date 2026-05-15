@@ -159,6 +159,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "(no built-in defaults to clear)."
         ),
     )
+    parser.add_argument(
+        "--legacy",
+        action="store_true",
+        help=(
+            "Render Flows using the all-at-once renderer (the pre-v0.5 "
+            "default). The progressive renderer is the default."
+        ),
+    )
     args = parser.parse_args(argv)
 
     # Resolve the Scope BEFORE compilation: a broken config shouldn't make
@@ -197,7 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write("\n")
         return 0
 
-    return _serve(facts, flows, args.host, args.port)
+    return _serve(facts, flows, args.host, args.port, legacy=args.legacy)
 
 
 def _resolve_scope(args: argparse.Namespace, cwd: Path) -> Scope:
@@ -255,7 +263,7 @@ def _load_partial_scope(config_arg: str | None, cwd: Path) -> PartialScope:
     return load_partial_scope_from_toml(Path(config_arg))
 
 
-def _serve(facts, flows, host: str, port: int) -> int:
+def _serve(facts, flows, host: str, port: int, *, legacy: bool = False) -> int:
     """Start the local server. Hard-fails on bind errors with a clear message."""
     from .serve.app import _check_port_available
 
@@ -269,7 +277,7 @@ def _serve(facts, flows, host: str, port: int) -> int:
         )
         return 1
 
-    app = create_app(facts, flows)
+    app = create_app(facts, flows, legacy=legacy)
     print(f"Solidity Flow Navigator running at http://{host}:{port}", flush=True)
     try:
         run_server(app, host, port)

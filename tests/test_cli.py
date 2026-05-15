@@ -31,11 +31,13 @@ def _args(
     inline_library: list[str] | None = None,
     stub_path: list[str] | None = None,
     no_default_excludes: bool = False,
+    legacy: bool = False,
 ) -> argparse.Namespace:
     """Build an argparse.Namespace mirroring what ``main()``'s parser produces.
 
-    All flag fields are filled so ``_resolve_scope`` finds the attributes
-    it expects regardless of which subset of flags the test exercises.
+    All flag fields are filled so the Namespace matches what argparse
+    produces in ``main()``, even though ``_resolve_scope`` only reads
+    the scope-related subset.
     """
 
     return argparse.Namespace(
@@ -45,6 +47,7 @@ def _args(
         inline_library=inline_library,
         stub_path=stub_path,
         no_default_excludes=no_default_excludes,
+        legacy=legacy,
     )
 
 

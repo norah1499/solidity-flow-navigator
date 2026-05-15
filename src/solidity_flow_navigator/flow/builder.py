@@ -10,6 +10,7 @@ emitted as a ``FunctionNode`` with empty ``children`` per spec §11.10's v0
 limitation list.
 """
 
+import re
 from collections.abc import Iterator
 
 from solidity_flow_navigator.analysis.types import (
@@ -273,6 +274,11 @@ class _FlowBuilder:
             resolved = resolve_virtual_override(
                 self._require_invoker(), lexical_mod, self._contracts_by_name
             )
+            # v0.5 iter-2: locate the modifier-name application within the
+            # function's signature so the renderer can anchor the modifier's
+            # left-placed node + edge at the line where the name appears.
+            # None = not found; the renderer falls back to default routing.
+            csl = _modifier_application_line(func, mod_name)
             if resolved is None:
                 children.append(
                     UnresolvedNode(
@@ -289,6 +295,7 @@ class _FlowBuilder:
                     resolved,
                     invoked_via_super=False,
                     path=path,
+                    call_site_line=csl,
                 )
             )
         return tuple(children)
@@ -298,6 +305,7 @@ class _FlowBuilder:
         func: Function,
         invoked_via_super: bool,
         path: frozenset[str],
+        call_site_line: int | None = None,
     ) -> FunctionNode:
         """Recursive node builder. Emits a terminal node (empty children) on cycle.
 
@@ -307,6 +315,12 @@ class _FlowBuilder:
         for — callers in ``_handle_internal_or_library`` and
         ``_handle_high_level`` apply ``resolve_virtual_override`` before
         passing the function in (stages 2 and 3 progressively).
+
+        ``call_site_line`` is the v0.5-exploration field on FunctionNode;
+        see ``FunctionNode.call_site_line`` docstring. Edge-handling callers
+        pass the originating call's first line so the progressive renderer
+        can anchor an expansion affordance to it. Modifier children pass
+        None (no body-call origin).
         """
 
         invoker_name = self._invoker_name()
@@ -314,7 +328,9 @@ class _FlowBuilder:
         if func.canonical_name in path:
             # v0: implicit cycle termination per spec §11.10. Renderer can
             # spot the cycle by matching canonical_name against an ancestor.
-            return self._terminal_function_node(func, invoker_name, invoked_via_super)
+            return self._terminal_function_node(
+                func, invoker_name, invoked_via_super, call_site_line
+            )
 
         new_path = path | {func.canonical_name}
         children, builtins = self._process_calls(
@@ -338,10 +354,15 @@ class _FlowBuilder:
             source_location=func.source_location,
             builtins_used=builtins,
             children=children,
+            call_site_line=call_site_line,
         )
 
     def _terminal_function_node(
-        self, func: Function, invoked_via: str, invoked_via_super: bool
+        self,
+        func: Function,
+        invoked_via: str,
+        invoked_via_super: bool,
+        call_site_line: int | None = None,
     ) -> FunctionNode:
         return FunctionNode(
             canonical_name=func.canonical_name,
@@ -359,6 +380,7 @@ class _FlowBuilder:
             source_location=func.source_location,
             builtins_used=(),
             children=(),
+            call_site_line=call_site_line,
         )
 
     def _invoker_name(self) -> str:
@@ -584,6 +606,7 @@ class _FlowBuilder:
             target,
             invoked_via_super=invoked_via_super,
             path=path,
+            call_site_line=_first_line_or_none(edge.source_location.lines),
         )
 
     def _handle_high_level(self, edge: CallEdge, path: frozenset[str]) -> FlowNode:
@@ -658,6 +681,7 @@ class _FlowBuilder:
             target,
             invoked_via_super=False,
             path=path,
+            call_site_line=_first_line_or_none(edge.source_location.lines),
         )
 
     def _external_node(self, target: Function, edge: CallEdge) -> ExternalNode:
@@ -705,6 +729,43 @@ class _FlowBuilder:
 # ---------------------------------------------------------------------------
 # Descriptor formatters for unresolved-node labels
 # ---------------------------------------------------------------------------
+
+
+def _first_line_or_none(lines: tuple[int, ...]) -> int | None:
+    """First line number from a SourceLocation's ``lines`` tuple, or ``None``
+    if it is empty. Used to populate ``FunctionNode.call_site_line`` from
+    the originating call edge (v0.5 exploration field).
+    """
+    return lines[0] if lines else None
+
+
+def _modifier_application_line(func: Function, modifier_name: str) -> int | None:
+    """Locate the 1-indexed absolute file line where ``modifier_name`` appears
+    in ``func``'s signature (v0.5 exploration helper).
+
+    Slither's IR doesn't expose per-modifier-application source locations,
+    so this is a greppy fallback: word-boundary match for ``modifier_name``
+    in the substring of ``func.source_code`` BEFORE the first ``{`` (i.e.,
+    the signature/header). Returns the absolute file line of the first
+    match, or ``None`` if no match is found (renderer then falls back to
+    default routing for the modifier edge).
+
+    Restricting the search to the header avoids false matches in the body
+    where another local function/variable might share the modifier's name.
+    Modifier names that collide with the function name itself remain a
+    pathological edge case we accept missing for the prototype.
+    """
+    src = func.source_code or ""
+    brace = src.find("{")
+    header = src[:brace] if brace != -1 else src
+    pat = re.compile(r"\b" + re.escape(modifier_name) + r"\b")
+    m = pat.search(header)
+    if m is None:
+        return None
+    relative_line = header[: m.start()].count("\n")
+    if not func.source_location.lines:
+        return None
+    return func.source_location.lines[0] + relative_line
 
 
 def _describe_low_level(edge: CallEdge) -> str:

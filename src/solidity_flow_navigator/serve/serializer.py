@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from ..flow.types import Flow, FlowNode, FunctionNode
+from ..flow.types import ExternalNode, Flow, FlowNode, FunctionNode, UnresolvedNode
 from .highlight import highlight_solidity
 
 
@@ -60,10 +60,19 @@ def _serialize_node(node: FlowNode) -> dict[str, Any]:
     children and no source body. ``asdict`` over a dataclass containing a
     ``StrEnum`` writes the enum's string value, which is what the template
     wants to render.
+
+    v0.5 exploration: unresolved/external dicts are normalized to expose a
+    ``call_site_line`` field (1-indexed absolute file line of the call),
+    mirroring the field of the same name on FunctionNode. This lets the
+    progressive renderer apply one rule to every child variant when
+    mapping a call to a line in the parent's source body.
     """
     if isinstance(node, FunctionNode):
         d = asdict(node)
         d["source_html"] = highlight_solidity(node.source_code)
         d["children"] = [_serialize_node(c) for c in node.children]
         return d
-    return asdict(node)
+    d = asdict(node)
+    if isinstance(node, (UnresolvedNode, ExternalNode)):
+        d["call_site_line"] = node.call_site.lines[0] if node.call_site.lines else None
+    return d

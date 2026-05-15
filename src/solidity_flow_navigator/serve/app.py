@@ -195,7 +195,16 @@ def _signature_suffix(flow: Flow) -> str:
 # ---------------------------------------------------------------------------
 
 
-def create_app(facts: RepoFacts, flows: tuple[Flow, ...]) -> Flask:
+def create_app(
+    facts: RepoFacts, flows: tuple[Flow, ...], *, legacy: bool = False
+) -> Flask:
+    """Build the Flask application.
+
+    ``legacy=True`` switches the per-Flow page to load the all-at-once
+    renderer (``flow.js``) instead of the progressive renderer
+    (``flow-progressive.js``). The flag is set from the CLI's ``--legacy``
+    switch (spec §10.2). Default is the progressive renderer.
+    """
     app = Flask(
         __name__,
         template_folder="templates",
@@ -216,7 +225,7 @@ def create_app(facts: RepoFacts, flows: tuple[Flow, ...]) -> Flask:
     # Common context for every rendered template.
     @app.context_processor
     def _inject_globals() -> dict[str, Any]:
-        return {"repo_path": facts.repo_path}
+        return {"repo_path": facts.repo_path, "legacy_renderer": legacy}
 
     @app.route("/")
     def index() -> str:

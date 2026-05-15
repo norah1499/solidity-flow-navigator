@@ -424,6 +424,102 @@ body.flow-page .flow-header {
   font-weight: 400;
 }
 
+/* v0.5 progressive-render: clickable call lines inside function-node bodies.
+   Wrappers are server-rendered (`<span class="src-line">` per source line),
+   with `--call` on lines that hold an outgoing call. The non-call wrapper
+   exists so the per-line addressing scheme stays uniform; only the --call
+   variant gets a hover/click affordance.
+
+   v0.5 iter-2: call lines are TOGGLES. The `--expanded` modifier marks
+   lines whose children are currently visible; clicking a non-expanded
+   line expands, clicking an expanded line collapses. */
+.src-line { display: inline; }
+.src-line--call { cursor: pointer; border-radius: 2px; }
+.src-line--call:hover {
+  background: rgba(58, 109, 176, 0.12);
+  box-shadow: -4px 0 0 rgba(58, 109, 176, 0.12);
+}
+.src-line--expanded {
+  background: rgba(90, 143, 196, 0.10);
+  box-shadow: -4px 0 0 rgba(90, 143, 196, 0.40);
+}
+.src-line--expanded::after {
+  content: " ▾";
+  color: rgba(90, 143, 196, 0.80);
+  font-size: 0.9em;
+}
+@media (prefers-color-scheme: dark) {
+  .src-line--call:hover {
+    background: rgba(127, 179, 235, 0.16);
+    box-shadow: -4px 0 0 rgba(127, 179, 235, 0.16);
+  }
+  .src-line--expanded {
+    background: rgba(127, 179, 235, 0.14);
+    box-shadow: -4px 0 0 rgba(127, 179, 235, 0.45);
+  }
+  .src-line--expanded::after {
+    color: rgba(127, 179, 235, 0.85);
+  }
+}
+
+/* v0.5 iter-2: soft-blue call-name token coloring. The renderer wraps any
+   text node inside `.src-line--call` whose value matches a known call
+   target's name in `<span class="src-call-name">`. Specificity stacked
+   under `.src-line--call` so it overrides the Pygments name-token color
+   (`.src .n*`) only inside clickable lines — bare prose stays at the
+   keyword/name palette elsewhere.
+
+   #5a8fc4 was picked from the conversation hint: muted hyperlink-blue,
+   distinct from --tok-keyword (#0c447c — much darker) and the modifier
+   badge blue (#3a6db0 — also darker, more saturated). In dark mode it
+   shifts up to the same #7fb3eb the keyword override uses, keeping the
+   ladder consistent. */
+.src .src-line--call .src-call-name,
+.src .src-line--call .src-call-name * {
+  color: #5a8fc4;
+}
+.src-line--call:hover .src-call-name {
+  text-decoration: underline dotted;
+}
+@media (prefers-color-scheme: dark) {
+  .src .src-line--call .src-call-name,
+  .src .src-line--call .src-call-name * {
+    color: #7fb3eb;
+  }
+}
+
+/* v0.5 stage 3: compact pill-style nodes for terminal variants
+   (ExternalNode, UnresolvedNode). They have no further expansion, so the
+   block-style presentation reads heavier than needed. */
+.node--pill {
+  padding: 0.4rem 0.8rem;
+  border-radius: 14px;
+  max-width: 36rem;
+}
+.node--pill .node-head {
+  margin-bottom: 0;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.node--pill .node-head .node-path {
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+
+/* v0.5 iter-2: edges are clickable to collapse the node they point at.
+   The svg root keeps `pointer-events: none` so empty regions stay
+   transparent for the d3-zoom drag handler on `#graph-frame`; individual
+   paths override with `pointer-events: stroke` so only the painted stroke
+   is hit-targetable. */
+#edges .edge.edge-clickable {
+  pointer-events: stroke;
+  cursor: pointer;
+}
+#edges .edge.edge-clickable:hover {
+  stroke-width: 2px;
+  stroke: var(--node-mod-border);
+}
+
 /* ----- Pygments token overrides ----------------------------------------- */
 /* Sit on top of pygments.css; selectors share specificity (.src .x), so
    load order in base.html (pygments first, main second) decides the winner. */

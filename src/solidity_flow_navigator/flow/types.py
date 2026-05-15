@@ -45,6 +45,15 @@ class FunctionNode:
     edges that are NOT dynamic dispatch (per §13.3), plus folded markers for
     ``send``/``transfer``/``new_contract`` edges (§11.9 v0 simplification). Order
     and duplicates are preserved.
+
+    ``call_site_line`` (v0.5 exploration; not in spec) is the 1-indexed
+    absolute file line of the call statement that produced this node, taken
+    from the originating ``CallEdge.source_location.lines[0]``. It is ``None``
+    for the Flow root (no parent call) and for modifier children (the
+    modifier is applied at the function header, not a body call). The
+    progressive renderer uses it to identify which line of the parent's
+    source body to make clickable for expansion; line-level granularity is
+    sufficient for the prototype.
     """
 
     node_type: Literal["function"] = field(default="function", kw_only=True)
@@ -63,6 +72,9 @@ class FunctionNode:
     source_location: SourceLocation
     builtins_used: tuple[str, ...]
     children: tuple["FlowNode", ...]
+    # v0.5 exploration field — see class docstring. Optional + kw_only so
+    # existing test/code constructions remain valid without amendment.
+    call_site_line: int | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)

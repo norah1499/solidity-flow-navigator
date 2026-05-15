@@ -52,6 +52,21 @@ def client_unfiltered(
     return app.test_client()
 
 
+@pytest.fixture(scope="module")
+def client_legacy(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...]
+) -> FlaskClient:
+    """Variant of ``client`` built with ``legacy=True``.
+
+    Equivalent to running ``solflow --legacy``: the per-Flow page loads
+    the all-at-once renderer (``flow.js``) instead of the progressive
+    renderer (``flow-progressive.js``). See spec §10.2.
+    """
+    app = create_app(solmate_facts, solmate_flows, legacy=True)
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
 # -- index ------------------------------------------------------------------
 
 
@@ -194,8 +209,35 @@ def test_flow_page_known_url_id(
     # Vendored libs and frontend script tags.
     assert "/static/vendor/dagre.min.js" in body
     assert "/static/vendor/d3.min.js" in body
-    assert "/static/js/flow.js" in body
+    # v0.5 default: the progressive renderer loads instead of flow.js.
+    # The legacy renderer is opt-in via solflow --legacy (covered in
+    # test_flow_page_legacy_loads_flow_js below).
+    assert "/static/js/flow-progressive.js" in body
+    assert "/static/js/flow.js" not in body
     # Graph container the JS targets.
+    assert 'id="graph-frame"' in body
+
+
+def test_flow_page_legacy_loads_flow_js(
+    client_legacy: FlaskClient, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """``solflow --legacy`` swaps the renderer script tag to flow.js.
+
+    The page still embeds the same flow JSON and references the same
+    vendored libs — only the renderer choice differs.
+    """
+    target = next(
+        f
+        for f in solmate_flows
+        if f.entry_point_invoker_canonical_name == "ERC4626.deposit(uint256,address)"
+    )
+    rv = client_legacy.get(f"/flow/{target.entry_point_invoker_canonical_name}")
+    assert rv.status_code == 200
+    body = rv.get_data(as_text=True)
+    assert "/static/js/flow.js" in body
+    assert "/static/js/flow-progressive.js" not in body
+    # Sanity: the rest of the page chrome still renders.
+    assert '<script type="application/json" id="flow-data">' in body
     assert 'id="graph-frame"' in body
 
 
@@ -306,6 +348,7 @@ def test_flow_page_unknown_returns_404(client: FlaskClient) -> None:
         "/static/vendor/dagre.min.js",
         "/static/vendor/d3.min.js",
         "/static/js/flow.js",
+        "/static/js/flow-progressive.js",
     ],
 )
 def test_static_assets_served(client: FlaskClient, path: str) -> None:
