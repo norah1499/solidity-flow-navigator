@@ -1,23 +1,43 @@
-/* flow.js — Layer 3 frontend: read embedded Flow JSON, lay out with dagre,
- * pan/zoom with d3, render HTML nodes over an SVG edge layer.
+/* flow.js — Layer 3 frontend, legacy all-at-once renderer.
+ *
+ * Loaded when `solflow --legacy` is in effect; flow-progressive.js is the
+ * default. Legacy renders the entire Flow tree at page load: dagre lays
+ * out all body-call children top-to-bottom, modifiers are lifted out of
+ * dagre and placed manually in the upper-left of their parent (spec §11.6),
+ * and every edge originates from the parent's call_site_line (spec §10.2,
+ * "Per-line edge anchoring" — shared by both renderers).
  *
  * Pipeline:
- *   1. parse #flow-data
- *   2. assign stable IDs by walking the tree depth-first; build dagre graph
- *   3. render every node DOM element invisibly inside #nodes
- *   4. measure each rendered element, set width/height on the dagre node
- *   5. dagre.layout(g) — produces (x, y) centres + edge polylines
- *   6. position the rendered nodes (left = x - w/2, top = y - h/2),
- *      draw edges into #edges, then make nodes visible
- *   7. compute the laid-out bounding box and apply a d3-zoom fit transform
- *   8. wire the Reset View button to replay the fit transform
+ *   1. parse #flow-data, index every node by tree-position id
+ *   2. classify modifiers + modifier descendants as manual-layout
+ *   3. render every node DOM element inside #nodes (invisible during
+ *      measurement); function nodes wrap each source line in
+ *      `<span class="src-line" data-line=i>` so edge anchoring can resolve
+ *      a call_site_line to an in-node Y
+ *   4. dagre receives only non-manual-layout nodes and their edges
+ *   5. dagre.layout() → (x, y) centres + edge polylines
+ *   6. manual placement pass: modifiers stack vertically upper-left of
+ *      their parent in declaration order; modifier subtree descendants
+ *      stack straight down beneath the modifier (Stage 1 placeholder per
+ *      §11.10, matching flow-progressive.js)
+ *   7. translate everything to the (0,0) origin, set DOM positions, draw
+ *      edges with pts[0] overridden to the parent's call-site line; manual
+ *      edges (parent → modifier, modifier → subtree descendant) drawn
+ *      with explicit anchors
+ *   8. compute laid-out bounding box, fit transform via d3-zoom
  *
- * Visibility flicker is avoided by leaving the #graph wrapper invisible
- * until step 6 finishes, so the user never sees the pre-layout overlap.
+ * Visibility flicker is avoided by leaving #graph at data-state="measuring"
+ * (visibility: hidden) until step 7 completes.
+ *
+ * Per-line anchoring + modifier placement are intentionally implemented in
+ * parallel to flow-progressive.js rather than via a shared module — see the
+ * v0.5.1 sprint notes (HANDOFF.md) for the decide-and-flag rationale.
  */
 
 (function () {
   "use strict";
+
+  const SVG_NS = "http://www.w3.org/2000/svg";
 
   // ----- read embedded JSON ----------------------------------------------
 
@@ -36,26 +56,74 @@
   const edgesLayer = document.getElementById("edges");
   const resetButton = document.getElementById("reset-view");
 
-  // ----- ID strategy ------------------------------------------------------
+  // ----- ID strategy + tree index ----------------------------------------
   //
   // Tree-position IDs ("0", "0/0", "0/1/2") are stable, debuggable, and
-  // independent of node-content collisions (e.g. an UnresolvedNode appearing
-  // multiple times in different subtrees). The root is always "0".
+  // independent of node-content collisions. `nodesById` gives O(1) lookup
+  // of a node's JSON from its ID — used by edge anchoring (to read
+  // call_site_line and source_location) and modifier classification.
 
-  function assignIds(node, id) {
+  const nodesById = new Map();
+
+  function indexTree(node, id) {
     node.__id = id;
+    nodesById.set(id, node);
     if (node.node_type !== "function") return;
-    (node.children || []).forEach((c, i) => assignIds(c, id + "/" + i));
+    (node.children || []).forEach((c, i) => indexTree(c, id + "/" + i));
   }
-  assignIds(flow.root, "0");
+  indexTree(flow.root, "0");
 
-  // ----- DOM rendering ----------------------------------------------------
+  function parentIdOf(id) {
+    const i = id.lastIndexOf("/");
+    return i === -1 ? null : id.slice(0, i);
+  }
+
+  function isModifierNode(node) {
+    return node && node.node_type === "function" && node.is_modifier;
+  }
+
+  // ----- modifier classification -----------------------------------------
+  //
+  // Modifiers and any of their descendants are lifted out of dagre and
+  // positioned manually (upper-left of parent for modifiers, vertical
+  // column below the modifier for modifier subtrees). This mirrors
+  // flow-progressive.js exactly — the renderers differ only in the
+  // rendering trigger (page-load vs. click).
+
+  const modifierIds = new Set();
+  nodesById.forEach((node, id) => {
+    if (isModifierNode(node)) modifierIds.add(id);
+  });
+
+  function inManualLayout(id) {
+    for (const mid of modifierIds) {
+      if (id === mid || id.startsWith(mid + "/")) return true;
+    }
+    return false;
+  }
+
+  // ----- DOM rendering ---------------------------------------------------
 
   function el(tag, className, text) {
     const e = document.createElement(tag);
     if (className) e.className = className;
     if (text != null) e.textContent = text;
     return e;
+  }
+
+  // Wrap each source-code line in `<span class="src-line" data-line=i>` so
+  // we can compute the Y of any line within a rendered node — used by edge
+  // anchoring (per-line origination). Mirrors the per-line wrapping in
+  // flow-progressive.js but without the `--call` interaction class, since
+  // legacy renders everything at once and source lines are not click targets.
+  function wrapSourceLines(sourceHtml) {
+    if (!sourceHtml) return "";
+    return sourceHtml
+      .split("\n")
+      .map((lineHtml, i) =>
+        '<span class="src-line" data-line="' + i + '">' + lineHtml + "</span>",
+      )
+      .join("\n");
   }
 
   function renderFunctionNode(node) {
@@ -79,8 +147,7 @@
 
     if (node.source_html) {
       const pre = el("pre", "node-body src");
-      // source_html is server-rendered Pygments output we trust.
-      pre.innerHTML = node.source_html;
+      pre.innerHTML = wrapSourceLines(node.source_html);
       wrap.appendChild(pre);
     }
 
@@ -149,7 +216,13 @@
     throw new Error("flow.js: unknown node_type " + node.node_type);
   }
 
-  // ----- build dagre graph + insert DOM (invisible) ----------------------
+  // ----- build DOM tree + dagre graph -----------------------------------
+  //
+  // Every node gets a DOM element. Only non-manual-layout nodes (i.e.,
+  // not a modifier and not a modifier-subtree descendant) participate in
+  // dagre; their parent→child edges are dagre edges too, with the same
+  // exclusion. The remaining edges (parent→modifier and within-modifier-
+  // subtree) are drawn manually below.
 
   const g = new dagre.graphlib.Graph({ multigraph: false });
   g.setGraph({
@@ -161,92 +234,74 @@
   });
   g.setDefaultEdgeLabel(() => ({}));
 
-  // domByGraphId stores rendered DOM so we can position them after layout.
   const domByGraphId = new Map();
 
-  function addNodeToGraph(node) {
+  function walkAndAdd(node) {
     const dom = renderNode(node);
     dom.setAttribute("data-node-id", node.__id);
     nodesLayer.appendChild(dom);
     domByGraphId.set(node.__id, dom);
-    g.setNode(node.__id, { dom });
-  }
 
-  function walkAndAdd(node) {
-    addNodeToGraph(node);
+    if (!inManualLayout(node.__id)) {
+      g.setNode(node.__id, { dom });
+    }
+
     if (node.node_type !== "function") return;
     (node.children || []).forEach((c) => {
       walkAndAdd(c);
-      g.setEdge(node.__id, c.__id);
+      if (!inManualLayout(node.__id) && !inManualLayout(c.__id)) {
+        g.setEdge(node.__id, c.__id);
+      }
     });
   }
   walkAndAdd(flow.root);
 
   // ----- measure ---------------------------------------------------------
   //
-  // Nodes are inserted invisibly (via #graph[data-state=measuring]) at left:0
-  // top:0 so the browser still computes their natural width/height. We read
-  // those once and feed them back into the dagre node objects.
+  // Nodes are inserted invisibly (via #graph[data-state=measuring]) at
+  // left:0 top:0 so the browser still computes their natural width/height.
+  // We measure every DOM element (dagre and manual-layout alike) — the
+  // manual-layout ones still need a size for the modifier-column geometry.
 
   graph.dataset.state = "measuring";
 
-  domByGraphId.forEach((dom, id) => {
+  function measureDom(id) {
+    const dom = domByGraphId.get(id);
     const rect = dom.getBoundingClientRect();
-    const node = g.node(id);
-    node.width = Math.max(80, Math.ceil(rect.width));
-    node.height = Math.max(40, Math.ceil(rect.height));
+    return {
+      w: Math.max(80, Math.ceil(rect.width)),
+      h: Math.max(40, Math.ceil(rect.height)),
+    };
+  }
+
+  g.nodes().forEach((id) => {
+    const { w, h } = measureDom(id);
+    const n = g.node(id);
+    n.width = w;
+    n.height = h;
   });
 
   // ----- layout ----------------------------------------------------------
 
   dagre.layout(g);
 
-  // ----- position nodes --------------------------------------------------
+  // ----- build nodeRects from dagre, then run manual placement -----------
 
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const nodeRects = new Map();
 
   g.nodes().forEach((id) => {
     const n = g.node(id);
-    const dom = domByGraphId.get(id);
     const left = n.x - n.width / 2;
     const top = n.y - n.height / 2;
-    dom.style.left = left + "px";
-    dom.style.top = top + "px";
-    // Pin the measured width so flex/wrap-driven layout can't reflow now
-    // that the node has a position. Height is allowed to follow content.
-    dom.style.width = n.width + "px";
+    nodeRects.set(id, { x: n.x, y: n.y, w: n.width, h: n.height, left, top });
     if (left < minX) minX = left;
     if (top < minY) minY = top;
     if (left + n.width > maxX) maxX = left + n.width;
     if (top + n.height > maxY) maxY = top + n.height;
   });
-
-  // ----- draw edges ------------------------------------------------------
-
-  const line = d3
-    .line()
-    .x((p) => p.x)
-    .y((p) => p.y)
-    .curve(d3.curveBasis);
-
-  // d3 attaches paths to a child <g>; keep <defs> intact.
-  let edgesGroup = edgesLayer.querySelector("g.edges-group");
-  if (!edgesGroup) {
-    edgesGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    edgesGroup.setAttribute("class", "edges-group");
-    edgesLayer.appendChild(edgesGroup);
-  } else {
-    edgesGroup.innerHTML = "";
-  }
-
   g.edges().forEach((e) => {
     const edge = g.edge(e);
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", line(edge.points));
-    path.setAttribute("class", "edge");
-    path.setAttribute("marker-end", "url(#arrowhead)");
-    edgesGroup.appendChild(path);
-    // Track edge bounds too, in case edge routing extends past node bbox.
     edge.points.forEach((p) => {
       if (p.x < minX) minX = p.x;
       if (p.y < minY) minY = p.y;
@@ -255,25 +310,201 @@
     });
   });
 
-  // ----- size SVG layer to laid-out content ------------------------------
+  // Modifiers are placed manually upper-left of their parent in declaration
+  // order; modifier subtree descendants (if any) stack straight down beneath
+  // the modifier in a simple column. Spec §11.6 + §11.10 placeholder, same
+  // as flow-progressive.js.
+  const MODIFIER_GAP_X = 24;
+  const MODIFIER_GAP_Y = 8;
 
-  const layoutWidth = Math.ceil(maxX - minX) + 16;
-  const layoutHeight = Math.ceil(maxY - minY) + 16;
-  // Translate everything so (minX, minY) maps to (0, 0). Apply an offset
-  // transform on the edge group AND shift node positions by (-minX, -minY).
+  const modifiersByParent = new Map();
+  modifierIds.forEach((mid) => {
+    const pid = parentIdOf(mid);
+    if (!pid || !nodesById.has(pid)) return;
+    const arr = modifiersByParent.get(pid) || [];
+    arr.push(mid);
+    modifiersByParent.set(pid, arr);
+  });
+  modifiersByParent.forEach((arr, pid) => {
+    arr.sort((a, b) => {
+      const ai = parseInt(a.slice(pid.length + 1), 10);
+      const bi = parseInt(b.slice(pid.length + 1), 10);
+      return ai - bi;
+    });
+  });
+
+  function recordRect(id, left, top, w, h) {
+    nodeRects.set(id, { x: left + w / 2, y: top + h / 2, w, h, left, top });
+    if (left < minX) minX = left;
+    if (top < minY) minY = top;
+    if (left + w > maxX) maxX = left + w;
+    if (top + h > maxY) maxY = top + h;
+  }
+
+  modifiersByParent.forEach((modIds, pid) => {
+    const parentRect = nodeRects.get(pid);
+    if (!parentRect) return;
+    let stackY = parentRect.top;
+    modIds.forEach((mid) => {
+      const { w, h } = measureDom(mid);
+      const left = parentRect.left - w - MODIFIER_GAP_X;
+      const top = stackY;
+      recordRect(mid, left, top, w, h);
+      stackY = top + h + MODIFIER_GAP_Y;
+
+      const subDescendants = [];
+      nodesById.forEach((_node, vid) => {
+        if (vid === mid) return;
+        if (vid.startsWith(mid + "/")) subDescendants.push(vid);
+      });
+      subDescendants.sort();
+      let subY = top + h + MODIFIER_GAP_Y;
+      subDescendants.forEach((vid) => {
+        const sz = measureDom(vid);
+        recordRect(vid, left, subY, sz.w, sz.h);
+        subY = subY + sz.h + MODIFIER_GAP_Y;
+      });
+    });
+  });
+
+  // ----- size SVG layer, translate to (0,0) origin, position DOM --------
+
   const dx = -minX + 8;
   const dy = -minY + 8;
-  edgesGroup.setAttribute("transform", `translate(${dx}, ${dy})`);
-  domByGraphId.forEach((dom) => {
-    dom.style.left = parseFloat(dom.style.left) + dx + "px";
-    dom.style.top = parseFloat(dom.style.top) + dy + "px";
-  });
+  const layoutWidth = Math.ceil(maxX - minX) + 16;
+  const layoutHeight = Math.ceil(maxY - minY) + 16;
 
   graph.style.width = layoutWidth + "px";
   graph.style.height = layoutHeight + "px";
   edgesLayer.setAttribute("width", layoutWidth);
   edgesLayer.setAttribute("height", layoutHeight);
   edgesLayer.setAttribute("viewBox", `0 0 ${layoutWidth} ${layoutHeight}`);
+
+  domByGraphId.forEach((dom, id) => {
+    const r = nodeRects.get(id);
+    if (!r) return;
+    dom.style.left = (r.left + dx) + "px";
+    dom.style.top = (r.top + dy) + "px";
+    // Pin the measured width so flex/wrap-driven layout can't reflow now
+    // that the node has a position. Height is allowed to follow content.
+    dom.style.width = r.w + "px";
+  });
+
+  // ----- draw edges ------------------------------------------------------
+
+  const line = d3.line().x((p) => p.x).y((p) => p.y).curve(d3.curveBasis);
+
+  let edgesGroup = edgesLayer.querySelector("g.edges-group");
+  if (!edgesGroup) {
+    edgesGroup = document.createElementNS(SVG_NS, "g");
+    edgesGroup.setAttribute("class", "edges-group");
+    edgesLayer.appendChild(edgesGroup);
+  } else {
+    edgesGroup.innerHTML = "";
+  }
+
+  // Given a parent DOM and a parent-relative line index, return the line's
+  // x-extents and y-center within the parent. Returns null if the line
+  // span isn't found (e.g. call_site_line falls outside the rendered
+  // source slice). Identical to flow-progressive.js — see decide-and-flag
+  // note at top of file for why these helpers are kept parallel rather
+  // than extracted.
+  function lineOffsetInParent(parentDom, lineIdx) {
+    const span = parentDom.querySelector('.src-line[data-line="' + lineIdx + '"]');
+    if (!span) return null;
+    return {
+      xLeft: 0,
+      xRight: parentDom.offsetWidth,
+      y: span.offsetTop + span.offsetHeight / 2,
+    };
+  }
+
+  // Dagre edges: parent → body-call child. Override pts[0] to the parent's
+  // call-site line (parent.right_edge, line.y) so each arrow originates
+  // from the source line of the call rather than the parent's centre/edge.
+  g.edges().forEach((e) => {
+    const edge = g.edge(e);
+    const parentId = e.v;
+    const childId = e.w;
+    const parentNode = nodesById.get(parentId);
+    const childNode = nodesById.get(childId);
+    const parentDom = domByGraphId.get(parentId);
+    const parentRect = nodeRects.get(parentId);
+
+    let pts = edge.points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+
+    if (parentNode.node_type === "function" && childNode.call_site_line != null) {
+      const baseLine = parentNode.source_location.lines[0];
+      const rel = childNode.call_site_line - baseLine;
+      const off = lineOffsetInParent(parentDom, rel);
+      if (off) {
+        pts[0] = {
+          x: parentRect.left + dx + off.xRight,
+          y: parentRect.top + dy + off.y,
+        };
+      }
+    }
+
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", line(pts));
+    path.setAttribute("class", "edge");
+    path.setAttribute("marker-end", "url(#arrowhead)");
+    edgesGroup.appendChild(path);
+  });
+
+  // Manual edges: parent → modifier (anchored at the signature line
+  // carrying the modifier name), and modifier → modifier-subtree
+  // descendant (vertical drop, parent-center bottom to child-center top).
+  function drawManualEdge(parentId, childId) {
+    const parentRect = nodeRects.get(parentId);
+    const childRect = nodeRects.get(childId);
+    if (!parentRect || !childRect) return;
+    const parentNode = nodesById.get(parentId);
+    const childNode = nodesById.get(childId);
+    const parentDom = domByGraphId.get(parentId);
+
+    let from, to;
+    if (isModifierNode(childNode)) {
+      let parentY = parentRect.top + dy + parentRect.h / 2;
+      if (parentNode.node_type === "function" && childNode.call_site_line != null) {
+        const baseLine = parentNode.source_location.lines[0];
+        const rel = childNode.call_site_line - baseLine;
+        const off = lineOffsetInParent(parentDom, rel);
+        if (off) parentY = parentRect.top + dy + off.y;
+      }
+      from = { x: parentRect.left + dx, y: parentY };
+      to = {
+        x: childRect.left + dx + childRect.w,
+        y: childRect.top + dy + childRect.h / 2,
+      };
+    } else {
+      from = {
+        x: parentRect.left + dx + parentRect.w / 2,
+        y: parentRect.top + dy + parentRect.h,
+      };
+      to = {
+        x: childRect.left + dx + childRect.w / 2,
+        y: childRect.top + dy,
+      };
+    }
+    const midPt = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", line([from, midPt, to]));
+    path.setAttribute(
+      "class",
+      "edge" + (isModifierNode(childNode) ? " edge-modifier" : ""),
+    );
+    path.setAttribute("marker-end", "url(#arrowhead)");
+    edgesGroup.appendChild(path);
+  }
+
+  nodesById.forEach((_node, id) => {
+    if (!inManualLayout(id)) return;
+    const pid = parentIdOf(id);
+    if (!pid) return;
+    drawManualEdge(pid, id);
+  });
 
   // ----- reveal + d3-zoom -----------------------------------------------
 

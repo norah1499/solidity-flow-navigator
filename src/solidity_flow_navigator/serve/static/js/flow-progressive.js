@@ -580,35 +580,9 @@
 
     dagre.layout(g);
 
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    const nodeRects = new Map();
-    g.nodes().forEach((id) => {
-      const n = g.node(id);
-      const left = n.x - n.width / 2;
-      const top = n.y - n.height / 2;
-      nodeRects.set(id, { x: n.x, y: n.y, w: n.width, h: n.height, left, top });
-      if (left < minX) minX = left;
-      if (top < minY) minY = top;
-      if (left + n.width > maxX) maxX = left + n.width;
-      if (top + n.height > maxY) maxY = top + n.height;
-    });
-    g.edges().forEach((e) => {
-      const edge = g.edge(e);
-      edge.points.forEach((p) => {
-        if (p.x < minX) minX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y > maxY) maxY = p.y;
-      });
-    });
-
-    // Manual layout pass for modifiers + their subtrees.
-    //
-    // For each visible function with one or more visible modifier children,
-    // stack the modifiers vertically in the upper-left of the parent in
-    // declaration order. Modifier subtrees (Stage 1 placeholder) drop
-    // straight down beneath the modifier in a simple column — Stage 2 will
-    // route them through dagre as left-side children using the side model.
+    // Modifier grouping needs to happen BEFORE node-rect construction (and
+    // before edge-shift application) so we know each parent's modifier-zone
+    // height ahead of computing the v0.5.1 left-side shift below.
     const modifiersByParent = new Map();
     modifierIds.forEach((mid) => {
       const pid = parentIdOf(mid);
@@ -624,6 +598,104 @@
         return ai - bi;
       });
     });
+
+    // v0.5.1: left-side modifier-overlap shift.
+    //
+    // Modifiers are placed manually at upper-left of their parent, stacked
+    // downward from parent.top. Dagre, however, places left-side body-call
+    // children at roughly the same Y as the parent — so a left-side child
+    // visually intersects the modifier zone and hides it (Sablier
+    // createWithDurationsLD with calculateSegmentTimestamps expanded
+    // demonstrated this: the noDelegateCall modifier disappears behind the
+    // left child).
+    //
+    // Fix: when a parent has BOTH visible modifiers AND left-side dagre
+    // children, shift the entire left-side subtree DOWN by the parent's
+    // modifier-zone height + a gap. The shift cascades through ancestors:
+    // if grandparent G shifts P's left subtree by S_G, and P itself has
+    // modifiers and left-side children, P's left subtree shifts by
+    // S_G + (P's modifier zone + gap). Right-side subtrees are untouched.
+    const modZoneByParent = new Map(); // pid -> total stacked modifier height
+    modifiersByParent.forEach((modIds, pid) => {
+      let total = 0;
+      modIds.forEach((mid, i) => {
+        total += measureDom(mid).h;
+        if (i < modIds.length - 1) total += MODIFIER_GAP_Y;
+      });
+      modZoneByParent.set(pid, total);
+    });
+
+    const shiftById = new Map();
+    function computeShifts(id) {
+      let nodeShift;
+      if (id === flow.root.__id) {
+        nodeShift = 0;
+      } else {
+        const pid = parentIdOf(id);
+        const parentShift = shiftById.get(pid) || 0;
+        const side = sideById.get(id);
+        const parentZone = modZoneByParent.get(pid) || 0;
+        const extra =
+          side === "left" && parentZone > 0 ? parentZone + MODIFIER_GAP_Y : 0;
+        nodeShift = parentShift + extra;
+      }
+      shiftById.set(id, nodeShift);
+      const node = nodesById.get(id);
+      if (!node || node.node_type !== "function") return;
+      (node.children || []).forEach((c) => {
+        if (!visibleIds.has(c.__id)) return;
+        if (inManualLayout(c.__id)) return; // modifier subtree — manual layout, not dagre
+        computeShifts(c.__id);
+      });
+    }
+    computeShifts(flow.root.__id);
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const nodeRects = new Map();
+    g.nodes().forEach((id) => {
+      const n = g.node(id);
+      const shift = shiftById.get(id) || 0;
+      const left = n.x - n.width / 2;
+      const top = n.y - n.height / 2 + shift;
+      nodeRects.set(id, { x: n.x, y: n.y + shift, w: n.width, h: n.height, left, top });
+      if (left < minX) minX = left;
+      if (top < minY) minY = top;
+      if (left + n.width > maxX) maxX = left + n.width;
+      if (top + n.height > maxY) maxY = top + n.height;
+    });
+    g.edges().forEach((e) => {
+      const edge = g.edge(e);
+      // Apply the destination child's shift to every point on the polyline.
+      // For edges entirely within a shifted subtree, source and destination
+      // share the same shift, so this is a uniform translate. For boundary
+      // edges (unshifted parent → shifted child) the parent end of the
+      // polyline lands below the parent's actual position, but pts[0] is
+      // overridden to the parent's signature line during edge rendering, so
+      // the rendered curve still leaves from the correct anchor and sweeps
+      // down to the shifted child.
+      const reversed = !e.w.startsWith(e.v + "/");
+      const treeChildId = reversed ? e.v : e.w;
+      const edgeShift = shiftById.get(treeChildId) || 0;
+      if (edgeShift > 0) {
+        edge.points.forEach((p) => {
+          p.y += edgeShift;
+        });
+      }
+      edge.points.forEach((p) => {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      });
+    });
+
+    // Manual layout pass for modifiers + their subtrees.
+    //
+    // For each visible function with one or more visible modifier children,
+    // stack the modifiers vertically in the upper-left of the parent in
+    // declaration order. Modifier subtrees (Stage 1 placeholder) drop
+    // straight down beneath the modifier in a simple column — Stage 2 will
+    // route them through dagre as left-side children using the side model.
 
     function recordRect(id, left, top, w, h) {
       nodeRects.set(id, { x: left + w / 2, y: top + h / 2, w, h, left, top });

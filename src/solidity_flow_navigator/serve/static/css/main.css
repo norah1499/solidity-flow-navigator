@@ -310,11 +310,17 @@ body.flow-page .flow-header {
 
 /* ----- nodes (used by both the graph and any static fallback) ---------- */
 
+/* v0.5.1: node boxes auto-size to their widest content. Previously a
+   `max-width: 60rem` cap (with `overflow-x: auto` on the source pre)
+   clipped or scrolled long titles and long source lines (e.g. Sablier
+   `checkCreateLockupLinear` with its multi-arg signature). Now both the
+   title and the source pre flow to their intrinsic width, and the node
+   grows to `max(title_width, source_pre_width)`. Dagre handles wide
+   nodes — there is no layout penalty for letting the box grow. */
 .node {
   border: 0.5px solid var(--border-strong);
   background: var(--bg-surface);
   padding: 0.75rem 1rem;
-  max-width: 60rem;
 }
 
 .node--function {
@@ -350,6 +356,7 @@ body.flow-page .flow-header {
   font-family: var(--font-sans);
   font-size: 14px;
   font-weight: 500;
+  white-space: nowrap;
 }
 
 .node-title code {
@@ -398,7 +405,6 @@ body.flow-page .flow-header {
   font-size: 12px;
   line-height: 1.65;
   white-space: pre;
-  overflow-x: auto;
   background: transparent;
 }
 
@@ -494,7 +500,6 @@ body.flow-page .flow-header {
 .node--pill {
   padding: 0.4rem 0.8rem;
   border-radius: 14px;
-  max-width: 36rem;
 }
 .node--pill .node-head {
   margin-bottom: 0;
