@@ -10,6 +10,7 @@ emitted as a ``FunctionNode`` with empty ``children`` per spec §11.10's v0
 limitation list.
 """
 
+import math
 import re
 from collections.abc import Iterator
 
@@ -412,7 +413,23 @@ class _FlowBuilder:
         caller_declarer: str,
         path: frozenset[str],
     ) -> tuple[tuple[FlowNode, ...], tuple[str, ...]]:
-        """Split outgoing calls into FlowNode children and folded builtin markers."""
+        """Split outgoing calls into FlowNode children and folded builtin markers.
+
+        Children are returned in source-line order (v0.6.1). Slither's IR
+        emits calls in inside-out evaluation order — a call sub-expression
+        precedes its enclosing call (e.g. ``previewDeposit(assets)`` lands
+        before the enclosing ``require(...)``). Pre-v0.6.1 builds preserved
+        Slither's order verbatim (the §11.10 documented "inside-out call
+        ordering" limitation). The renderer's per-line edge anchoring keys
+        off source line, and dagre's natural intra-rank ordering keys off
+        node insertion order; when the two disagreed the bidirectional
+        layout produced sibling-crossing artifacts. Sorting children by
+        their originating call's source line at the dagre input boundary
+        aligns the two orderings without any layout-time post-processing.
+        Stable sort: children with no resolvable source line (defensive —
+        every CallEdge currently carries a source_location) keep their
+        pre-sort relative order via Python's ``list.sort`` stability.
+        """
 
         children: list[FlowNode] = []
         builtins: list[str] = []
@@ -428,6 +445,7 @@ class _FlowBuilder:
                 builtins.append(result)
             else:
                 children.append(result)
+        children.sort(key=_child_source_line_key)
         return tuple(children), tuple(builtins)
 
     def _dispatch_edge(
@@ -737,6 +755,22 @@ def _first_line_or_none(lines: tuple[int, ...]) -> int | None:
     the originating call edge (v0.5 exploration field).
     """
     return lines[0] if lines else None
+
+
+def _child_source_line_key(node: FlowNode) -> float:
+    """Sort key for source-line ordering of a function's children (v0.6.1).
+
+    Returns the originating call's 1-indexed file line for any FlowNode
+    variant; ``FunctionNode`` carries it on ``call_site_line``, while
+    ``UnresolvedNode`` and ``ExternalNode`` carry it on
+    ``call_site.lines[0]``. Missing values map to ``math.inf`` so that
+    nodes without a resolvable source line sort after all source-line-bearing
+    siblings while preserving their relative order via stable sort.
+    """
+    if isinstance(node, FunctionNode):
+        return node.call_site_line if node.call_site_line is not None else math.inf
+    lines = node.call_site.lines
+    return lines[0] if lines else math.inf
 
 
 def _modifier_application_line(func: Function, modifier_name: str) -> int | None:

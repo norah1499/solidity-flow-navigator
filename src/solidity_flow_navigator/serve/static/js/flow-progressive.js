@@ -157,9 +157,17 @@
 
   function renderUnresolvedNode(node) {
     const wrap = el("div", "node node--unresolved node--pill");
+    // v0.6.1: short-form title with full descriptor preserved in the
+    // native browser tooltip via the wrap's `title` attribute. Unlike
+    // FunctionNode, an Unresolved node has no source body to fall back
+    // on, so the tooltip is the only place the full signature can be
+    // recovered. shortenSignature is idempotent on already-short shapes
+    // like `<address>.call(...)`.
+    const fullDescriptor = node.descriptor || "(unknown)";
+    wrap.setAttribute("title", fullDescriptor);
     const head = el("div", "node-head");
     const title = el("span", "node-title");
-    title.appendChild(el("code", null, node.descriptor || "(unknown)"));
+    title.appendChild(el("code", null, shortenSignature(fullDescriptor)));
     head.appendChild(title);
 
     const badges = el("span", "node-badges");
@@ -171,12 +179,21 @@
 
   function renderExternalNode(node) {
     const wrap = el("div", "node node--external node--pill");
+    // v0.6.1: short-form title with full canonical signature preserved
+    // in the native browser tooltip. Same motivation as Unresolved —
+    // External nodes have no source body to fall back on.
+    const fullName = node.target_canonical_name || node.target_function_name || "";
+    if (fullName) wrap.setAttribute("title", fullName);
     const head = el("div", "node-head");
     const title = el("span", "node-title");
     if (node.target_contract_name) {
-      title.appendChild(el("code", null, node.target_canonical_name));
+      title.appendChild(el("code", null, shortenSignature(node.target_canonical_name)));
     } else {
-      title.appendChild(el("code", null, node.target_function_name));
+      // Free function / `using for` wrapper — no declarer contract per
+      // §11.10. target_canonical_name has no contract prefix but still
+      // carries the (args) shape; shortenSignature preserves the
+      // call-site `(...)` indicator that bare target_function_name lacks.
+      title.appendChild(el("code", null, shortenSignature(node.target_canonical_name || node.target_function_name)));
       title.appendChild(document.createTextNode(" "));
       title.appendChild(el("span", "node-no-contract", "[no contract]"));
     }

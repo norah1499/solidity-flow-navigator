@@ -4,6 +4,13 @@ A navigation tool for Web3 security auditors. Takes a Solidity repository, produ
 
 *Long-form name: Solidity Flow Navigator. CLI command: `solflow`.*
 
+<!-- TODO post-sprint: regenerate screenshot from a live v0.6.1
+     run showing short-form titles, bidirectional layout, and
+     modifier upper-left placement. Caption may need refresh.
+     Candidate flows: Aave V3 Pool.borrow, Sablier
+     createWithDurationsLT, or Morpho borrow — pick whichever
+     shows at least one modifier and several expanded children
+     in a single frame. -->
 ![A Flow rendered for SablierLockup.createWithTimestamps, showing modifier, internal helpers, and external library calls](docs/flow-example.png)
 
 *Sablier V2 Core — `SablierLockup.createWithTimestamps`. Cream nodes are in-scope functions with syntax-highlighted source, the blue badge is an inline modifier, and gray dashed nodes are external library calls (ERC721, SafeERC20, PRB-math). Free-function targets render with a muted `[no contract]` suffix.*
@@ -18,7 +25,7 @@ For each `external`/`public` function (plus `receive` and `fallback`) on each co
 - Folds modifiers inline into the function's call tree.
 - Surfaces calls into external dependencies (`lib/`, `node_modules/`, or any user-configured stub path) as terminal stubs.
 - Marks unresolvable dispatch (interface calls without binding, low-level `.call()`, dynamic Yul, abstract functions with no implementation in the chain) as explicit **unresolved** nodes — never silently omits, never guesses.
-- Renders the result as HTML+SVG with pan, zoom, syntax-highlighted source, and keyboard shortcuts.
+- Renders the result as HTML+SVG with pan, zoom, syntax-highlighted source, and keyboard shortcuts. The default renderer is progressive — each Flow opens with just the entry point and its modifiers visible and grows on click — and lays out bidirectionally around the root, with modifiers stacked upper-left, body-call children auto-balanced left/right under a no-crossings constraint, short-form node titles (`Contract.method(...)`), and the full canonical signature available on hover.
 
 ## Why
 
@@ -59,6 +66,8 @@ For non-default ports:
 .venv/bin/solflow path/to/repo --port 8081
 ```
 
+The all-at-once (legacy) renderer is opt-in via `--legacy` — useful when you want to scan the full Flow tree at a glance instead of expanding on click. The progressive renderer is recommended for anything larger than a couple of dozen nodes.
+
 **Keyboard shortcuts on a Flow page:** `0` or `r` resets zoom and pan to fit-to-frame.
 
 ## Scope configuration
@@ -85,7 +94,7 @@ Or via CLI flags (each repeatable, append to the resolved value):
   --inline-library "forge-std"
 ```
 
-`--no-default-excludes` clears the built-in path and contract excludes if you want full-codebase visibility (useful for auditing test setups themselves).
+`--no-default-excludes` clears the built-in path and contract excludes if you want full-codebase visibility (useful for auditing test setups themselves). `--config <path>` points at an alternate TOML config file when `solflow.toml` lives outside the working directory.
 
 See §11.2 of [`solidity-flow-navigator.md`](solidity-flow-navigator.md) for the full configuration semantics and resolution order.
 
@@ -101,7 +110,7 @@ The source of truth is [`solidity-flow-navigator.md`](solidity-flow-navigator.md
 
 ## Status
 
-**v0.3.1.** Pre-1.0 — interfaces and defaults may change. v0 success criteria are met (see §15 of the spec); v0.x is calibration and correctness work driven by real-codebase testing. Codebases the tool has been run against so far: Solmate, Morpho Blue, Sablier V2 Core.
+**v0.6.1.** Pre-1.0 — interfaces and defaults may change. v0 success criteria are met (see §15 of the spec); v0.x is calibration and correctness work driven by real-codebase testing. Codebases the tool has been run against so far: Solmate, Aave V3, Morpho Blue, Sablier V2 Core.
 
 ## License
 
