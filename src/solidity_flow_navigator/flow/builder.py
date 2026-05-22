@@ -231,6 +231,7 @@ class _FlowBuilder:
                 builtins_used=body_builtins,
                 children=modifier_children + body_children,
             )
+            unresolved_count, max_depth = _summarize_subtree(root_node)
             return Flow(
                 entry_point_declarer_canonical_name=entry_func.canonical_name,
                 entry_point_invoker_canonical_name=(
@@ -239,6 +240,8 @@ class _FlowBuilder:
                 entry_point_contract_name=invoker_contract.name,
                 entry_point_function_name=entry_func.name,
                 root=root_node,
+                unresolved_count=unresolved_count,
+                max_depth=max_depth,
             )
         finally:
             self._current_invoker_contract = prev_invoker
@@ -755,6 +758,36 @@ def _first_line_or_none(lines: tuple[int, ...]) -> int | None:
     the originating call edge (v0.5 exploration field).
     """
     return lines[0] if lines else None
+
+
+def _summarize_subtree(root: FlowNode) -> tuple[int, int]:
+    """Return ``(unresolved_count, max_depth)`` for the subtree rooted at ``root``.
+
+    Single DFS, post-order. ``unresolved_count`` is the inclusive count of
+    ``UnresolvedNode`` descendants (an Unresolved root counts itself as 1;
+    a FunctionNode root contributes 0 from itself plus whatever its children
+    return). ``max_depth`` is the longest edge-distance from this node to any
+    leaf: ``ExternalNode`` and ``UnresolvedNode`` are leaves (depth 0);
+    a ``FunctionNode`` with no children is also a leaf (depth 0); a
+    ``FunctionNode`` with children contributes ``1 + max(child depths)``.
+
+    v0.8.0 helper feeding ``Flow.unresolved_count`` / ``Flow.max_depth``.
+    """
+    if isinstance(root, FunctionNode):
+        if not root.children:
+            return (0, 0)
+        unres_total = 0
+        max_child_depth = 0
+        for child in root.children:
+            c_unres, c_depth = _summarize_subtree(child)
+            unres_total += c_unres
+            if c_depth > max_child_depth:
+                max_child_depth = c_depth
+        return (unres_total, 1 + max_child_depth)
+    if isinstance(root, UnresolvedNode):
+        return (1, 0)
+    # ExternalNode
+    return (0, 0)
 
 
 def _child_source_line_key(node: FlowNode) -> float:

@@ -137,6 +137,15 @@ class Flow:
     ``entry_point_contract_name`` is the contract the entry point is invoked
     on; for an inherited entry point this differs from
     ``root.declarer_contract_name``.
+
+    ``unresolved_count`` is the number of ``UnresolvedNode`` descendants
+    reachable from ``root`` (inclusive — an unresolved root counts as 1; the
+    function-node root case naturally contributes 0). v0.8.0 derivation
+    consumed by the Layer 3 index page (§8.3 per-entry metadata column).
+
+    ``max_depth`` is the maximum edge-distance from ``root`` to any leaf —
+    a leaf-rooted Flow has ``max_depth == 0``. Same v0.8.0 derivation /
+    consumer as ``unresolved_count``.
     """
 
     entry_point_declarer_canonical_name: str
@@ -144,3 +153,5 @@ class Flow:
     entry_point_contract_name: str
     entry_point_function_name: str
     root: FunctionNode
+    unresolved_count: int
+    max_depth: int

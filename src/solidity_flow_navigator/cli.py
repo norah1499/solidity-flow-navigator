@@ -205,7 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write("\n")
         return 0
 
-    return _serve(facts, flows, args.host, args.port, legacy=args.legacy)
+    return _serve(facts, flows, args.host, args.port, legacy=args.legacy, scope=scope)
 
 
 def _resolve_scope(args: argparse.Namespace, cwd: Path) -> Scope:
@@ -263,7 +263,15 @@ def _load_partial_scope(config_arg: str | None, cwd: Path) -> PartialScope:
     return load_partial_scope_from_toml(Path(config_arg))
 
 
-def _serve(facts, flows, host: str, port: int, *, legacy: bool = False) -> int:
+def _serve(
+    facts,
+    flows,
+    host: str,
+    port: int,
+    *,
+    legacy: bool = False,
+    scope: Scope | None = None,
+) -> int:
     """Start the local server. Hard-fails on bind errors with a clear message."""
     from .serve.app import _check_port_available
 
@@ -277,7 +285,7 @@ def _serve(facts, flows, host: str, port: int, *, legacy: bool = False) -> int:
         )
         return 1
 
-    app = create_app(facts, flows, legacy=legacy)
+    app = create_app(facts, flows, legacy=legacy, scope=scope)
     print(f"Solidity Flow Navigator running at http://{host}:{port}", flush=True)
     try:
         run_server(app, host, port)

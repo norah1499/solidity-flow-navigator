@@ -124,14 +124,72 @@ code, pre { font-family: var(--font-mono); }
 
 /* ----- index page --------------------------------------------------------- */
 
-.index-summary {
-  margin: 0 0 2rem;
+/* v0.8.0 index header: page-level title with repo_path subtitle and three
+   right-aligned count widgets. Replaces the v0.7.0 `.index-summary` line. */
+.index-header {
+  margin: 0 0 1rem;
+}
+
+.index-header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2rem;
+  flex-wrap: wrap;
+}
+
+.index-title {
+  font-size: 18px;
+  font-weight: 500;
+  margin: 0;
+}
+
+.index-counts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 1.5rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* Spec §8.3: count values in default text color, labels in --fg-muted. */
+.count-item .count-value {
+  color: var(--fg-text);
+}
+
+.count-item .count-label {
   color: var(--fg-muted);
 }
 
-.index-summary .count {
+.index-subtitle {
+  margin: 0.25rem 0 0;
   font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* v0.8.0 scope summary line: prefix + excluded globs + stub-paths section,
+   chrome (Scope, separators, section labels) in --fg-muted; glob values
+   and the literal "none" in default text color (spec §8.3). */
+.index-scope {
+  margin: 0 0 2rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.7;
+}
+
+.index-scope .scope-chrome {
+  color: var(--fg-muted);
+}
+
+.index-scope .scope-glob,
+.index-scope .scope-none {
   color: var(--fg-text);
+  background: transparent;
+  font-family: var(--font-mono);
 }
 
 .index-group {
@@ -192,9 +250,42 @@ code, pre { font-family: var(--font-mono); }
 
 .entry-list li { margin: 0.2rem 0; }
 
+/* v0.8.0 entry row: flex layout so the per-entry metadata column stays
+   right-aligned even when the signature wraps to multiple lines. The link
+   on the left can shrink and wrap; the metadata on the right does not. */
+.entry-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
 .entry-link {
   text-decoration: none;
   color: var(--fg-text);
+}
+
+/* v0.8.0 per-entry metadata column. `N unr` carries the same red used by
+   UnresolvedNode borders on Flow pages (--node-unresolved-border), so the
+   visual cue rhymes between the index and the source body it points at.
+   `dN` uses --fg-muted. Separator dot (when both annotations present)
+   matches the muted chrome around it. */
+.entry-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.meta-unresolved {
+  color: var(--node-unresolved-border);
+}
+
+.meta-depth,
+.meta-sep {
+  color: var(--fg-muted);
 }
 
 .entry-link code {
@@ -213,6 +304,19 @@ code, pre { font-family: var(--font-mono); }
 .entry-link:hover code,
 .entry-link:focus code {
   text-decoration: underline;
+}
+
+/* v0.8.0 privacy footer: one-line documentation of the localhost-only
+   execution model, rendered in muted chrome under a soft top border. The
+   text content is the auditor's first-glance assurance that the page they
+   landed on cannot upload code. */
+.privacy-footer {
+  margin: 3rem 0 1rem;
+  padding-top: 1rem;
+  border-top: 0.5px solid var(--border-soft);
+  font-size: 11px;
+  color: var(--fg-muted);
+  text-align: center;
 }
 
 /* ----- flow page (Stage 1 placeholder) ----------------------------------- */

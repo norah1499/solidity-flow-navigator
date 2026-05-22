@@ -29,6 +29,7 @@ from flask import Flask, abort, render_template
 from markupsafe import Markup
 
 from ..analysis.types import RepoFacts
+from ..flow.scope import DEFAULT_SCOPE, Scope
 from ..flow.types import Flow
 from .highlight import highlight_signature, write_pygments_css
 from .serializer import serialize_flow
@@ -88,6 +89,13 @@ class _EntryPointEntry:
     # dark blue — same visual language used inside Flow-page source bodies.
     # See spec §8.3.
     signature_html: str
+    # v0.8.0 per-entry metadata (spec §8.3 per-entry metadata column).
+    # ``unresolved_count``: number of UnresolvedNode descendants in this
+    # Flow; the template renders ``N unr`` only when > 0.
+    # ``max_depth``: longest edge-distance from root to any leaf; the
+    # template renders ``dN`` unconditionally.
+    unresolved_count: int
+    max_depth: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +107,11 @@ class _ContractEntry:
     # than emitting a "Read-only (none)" placeholder.
     mutating_entry_points: tuple[_EntryPointEntry, ...]
     read_only_entry_points: tuple[_EntryPointEntry, ...]
+    # v0.8.0 pre-computed cardinalities so the template doesn't have to call
+    # ``|length`` filters on each render; the per-section count suffix
+    # (``Mutating · N``) reads these directly. Spec §8.3 per-section totals.
+    mutating_count: int
+    read_only_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,13 +132,17 @@ def _contract_source_paths(facts: RepoFacts) -> dict[str, str]:
 
 def build_index(
     facts: RepoFacts, flows: Iterable[Flow]
-) -> tuple[tuple[_GroupEntry, ...], int, int]:
+) -> tuple[tuple[_GroupEntry, ...], int, int, int]:
     """Group flows by category → contract → entry point, sub-grouped by mutability.
 
-    Returns ``(groups, total_entry_points, total_contracts)``. Empty groups
-    are still returned (so the template can decide whether to show them).
-    Within a group, contracts are sorted alphabetically; within a contract,
-    each mutability bucket is sorted by full_name independently (spec §8.3).
+    Returns ``(groups, total_entry_points, total_contracts, total_unresolved)``.
+    ``total_unresolved`` is the sum of ``Flow.unresolved_count`` across every
+    Flow — the index header's "trust budget" figure per spec §8.3.
+
+    Empty groups are still returned (so the template can decide whether to
+    show them). Within a group, contracts are sorted alphabetically; within
+    a contract, each mutability bucket is sorted by full_name independently
+    (spec §8.3).
     """
     contract_paths = _contract_source_paths(facts)
 
@@ -139,6 +156,7 @@ def build_index(
     }
 
     total = 0
+    total_unresolved = 0
     for flow in flows:
         cn = flow.entry_point_contract_name
         # Fall back to the root function's source path if we somehow can't
@@ -150,6 +168,7 @@ def build_index(
         full_name = flow.entry_point_function_name + _signature_suffix(flow)
         bucket.append((flow, full_name))
         total += 1
+        total_unresolved += flow.unresolved_count
 
     groups: list[_GroupEntry] = []
     contract_count = 0
@@ -172,6 +191,8 @@ def build_index(
                     contract_name=cn,
                     function_full_name=full_name,
                     signature_html=sig_html,
+                    unresolved_count=flow.unresolved_count,
+                    max_depth=flow.max_depth,
                 )
                 if is_read_only:
                     read_only.append(ep)
@@ -184,12 +205,14 @@ def build_index(
                     source_path=path,
                     mutating_entry_points=tuple(mutating),
                     read_only_entry_points=tuple(read_only),
+                    mutating_count=len(mutating),
+                    read_only_count=len(read_only),
                 )
             )
             contract_count += 1
         groups.append(_GroupEntry(label=label, contracts=tuple(contracts)))
 
-    return tuple(groups), total, contract_count
+    return tuple(groups), total, contract_count, total_unresolved
 
 
 def _signature_suffix(flow: Flow) -> str:
@@ -209,7 +232,11 @@ def _signature_suffix(flow: Flow) -> str:
 
 
 def create_app(
-    facts: RepoFacts, flows: tuple[Flow, ...], *, legacy: bool = False
+    facts: RepoFacts,
+    flows: tuple[Flow, ...],
+    *,
+    legacy: bool = False,
+    scope: Scope | None = None,
 ) -> Flask:
     """Build the Flask application.
 
@@ -217,7 +244,16 @@ def create_app(
     renderer (``flow.js``) instead of the progressive renderer
     (``flow-progressive.js``). The flag is set from the CLI's ``--legacy``
     switch (spec §10.2). Default is the progressive renderer.
+
+    ``scope`` is the active ``Scope`` whose raw glob strings drive the
+    v0.8.0 index scope summary line (spec §8.3). It is optional — tests
+    constructing an app without going through the CLI resolution path can
+    omit it; the index then falls back to ``DEFAULT_SCOPE`` so the line
+    still reflects something real rather than rendering empty. The CLI
+    always passes the resolved Scope explicitly.
     """
+    if scope is None:
+        scope = DEFAULT_SCOPE
     app = Flask(
         __name__,
         template_folder="templates",
@@ -233,7 +269,7 @@ def create_app(
     flow_by_url_id: dict[str, Flow] = {
         f.entry_point_invoker_canonical_name: f for f in flows
     }
-    groups, total_eps, total_contracts = build_index(facts, flows)
+    groups, total_eps, total_contracts, total_unresolved = build_index(facts, flows)
 
     # Common context for every rendered template.
     @app.context_processor
@@ -258,6 +294,8 @@ def create_app(
             groups=groups,
             total_entry_points=total_eps,
             total_contracts=total_contracts,
+            total_unresolved=total_unresolved,
+            scope=scope,
         )
 
     @app.route("/flow/<path:url_id>")

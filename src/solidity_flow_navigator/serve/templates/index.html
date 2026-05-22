@@ -3,12 +3,44 @@
 {% block body_class %}index-page{% endblock %}
 
 {% block content %}
-<section class="index-summary">
-  <p>
-    <span class="count">{{ total_entry_points }}</span> entry point{{ "s" if total_entry_points != 1 else "" }}
-    across <span class="count">{{ total_contracts }}</span> contract{{ "s" if total_contracts != 1 else "" }}.
-  </p>
-</section>
+<header class="index-header">
+  <div class="index-header-row">
+    <h1 class="index-title">Index</h1>
+    <ul class="index-counts">
+      <li class="count-item">
+        <span class="count-value">{{ total_contracts }}</span>
+        <span class="count-label">contracts</span>
+      </li>
+      <li class="count-item">
+        <span class="count-value">{{ total_entry_points }}</span>
+        <span class="count-label">entry points</span>
+      </li>
+      <li class="count-item">
+        <span class="count-value">{{ total_unresolved }}</span>
+        <span class="count-label">unresolved</span>
+      </li>
+    </ul>
+  </div>
+  <p class="index-subtitle">{{ repo_path }}</p>
+</header>
+
+<p class="index-scope">
+  <span class="scope-chrome">Scope</span>
+  <span class="scope-chrome">·</span>
+  <span class="scope-chrome">excluded</span>
+  {% for glob in scope.exclude_paths -%}
+    <code class="scope-glob">{{ glob }}</code>{% if not loop.last %}<span class="scope-chrome">,</span>{% endif %}
+  {% endfor %}
+  <span class="scope-chrome">·</span>
+  <span class="scope-chrome">stub</span>
+  {%- if scope.stub_paths %}
+    {% for glob in scope.stub_paths -%}
+      <code class="scope-glob">{{ glob }}</code>{% if not loop.last %}<span class="scope-chrome">,</span>{% endif %}
+    {% endfor %}
+  {%- else %}
+    <span class="scope-none">none</span>
+  {%- endif %}
+</p>
 
 {% for group in groups %}
   {% if group.contracts %}
@@ -22,13 +54,20 @@
       </h3>
       {% if contract.mutating_entry_points %}
       <section class="entry-section">
-        <h4 class="section-heading">Mutating</h4>
+        <h4 class="section-heading">Mutating · {{ contract.mutating_count }}</h4>
         <ul class="entry-list">
           {% for ep in contract.mutating_entry_points %}
-          <li>
+          <li class="entry-row">
             <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
               <code class="src">{{ ep.contract_name }}.{{ ep.signature_html | safe }}</code>
             </a>
+            <span class="entry-meta">
+              {%- if ep.unresolved_count > 0 -%}
+                <span class="meta-unresolved">{{ ep.unresolved_count }} unr</span>
+                <span class="meta-sep">·</span>
+              {%- endif -%}
+              <span class="meta-depth">d{{ ep.max_depth }}</span>
+            </span>
           </li>
           {% endfor %}
         </ul>
@@ -36,13 +75,20 @@
       {% endif %}
       {% if contract.read_only_entry_points %}
       <section class="entry-section">
-        <h4 class="section-heading">Read-only</h4>
+        <h4 class="section-heading">Read-only · {{ contract.read_only_count }}</h4>
         <ul class="entry-list">
           {% for ep in contract.read_only_entry_points %}
-          <li>
+          <li class="entry-row">
             <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
               <code class="src">{{ ep.contract_name }}.{{ ep.signature_html | safe }}</code>
             </a>
+            <span class="entry-meta">
+              {%- if ep.unresolved_count > 0 -%}
+                <span class="meta-unresolved">{{ ep.unresolved_count }} unr</span>
+                <span class="meta-sep">·</span>
+              {%- endif -%}
+              <span class="meta-depth">d{{ ep.max_depth }}</span>
+            </span>
           </li>
           {% endfor %}
         </ul>
@@ -53,4 +99,6 @@
   </section>
   {% endif %}
 {% endfor %}
+
+<p class="privacy-footer">All analysis local · code never uploaded · server bound to 127.0.0.1</p>
 {% endblock %}

@@ -138,8 +138,10 @@ def test_index_sub_groups_both_sections_for_mixed_contract(
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
     block = _extract_contract_block(body, "ERC4626")
-    assert ">Mutating<" in block, "Mutating section missing from ERC4626 block"
-    assert ">Read-only<" in block, "Read-only section missing from ERC4626 block"
+    # v0.8.0: section headings now carry a "· N" count suffix per spec §8.3,
+    # so the literal `>Mutating<` shape no longer appears.
+    assert ">Mutating · " in block, "Mutating section missing from ERC4626 block"
+    assert ">Read-only · " in block, "Read-only section missing from ERC4626 block"
 
 
 def test_index_omits_empty_section_for_single_kind_contract(
@@ -157,7 +159,7 @@ def test_index_omits_empty_section_for_single_kind_contract(
     Solmate's source shifts. Walking ``build_index``'s output is the
     authoritative source of truth.
     """
-    groups, _, _ = build_index(solmate_facts, solmate_flows)
+    groups, _, _, _ = build_index(solmate_facts, solmate_flows)
     single_kind: tuple[str, str] | None = None  # (contract_name, present_section)
     for group in groups:
         for contract in group.contracts:
@@ -182,11 +184,13 @@ def test_index_omits_empty_section_for_single_kind_contract(
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
     block = _extract_contract_block(body, contract_name)
+    # v0.8.0: section heading is `<heading>Present · N</heading>`; check both
+    # the leading marker and the section-count suffix together.
     assert (
-        f">{present}<" in block
+        f">{present} · " in block
     ), f"{present} section missing from {contract_name} block"
     assert (
-        f">{absent}<" not in block
+        f">{absent} · " not in block
     ), f"{absent} placeholder header should be omitted for {contract_name}"
 
 
@@ -256,7 +260,7 @@ def test_index_signature_html_set_on_entry_points(
     template refactor can't silently mask a regression in the underlying
     data shape.
     """
-    groups, _, _ = build_index(solmate_facts, solmate_flows)
+    groups, _, _, _ = build_index(solmate_facts, solmate_flows)
     seen_at_least_one = False
     for group in groups:
         for contract in group.contracts:
@@ -278,6 +282,341 @@ def test_index_signature_html_set_on_entry_points(
                     f"{ep.signature_html!r}"
                 )
     assert seen_at_least_one, "no entry points walked; fixture may be broken"
+
+
+# -- v0.8.0 index metadata (data shape) -------------------------------------
+
+
+def test_build_index_returns_total_unresolved(
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """build_index returns ``(groups, total_eps, total_contracts, total_unresolved)``.
+
+    ``total_unresolved`` is the sum of ``Flow.unresolved_count`` across every
+    Flow in the input — the v0.8.0 header "trust budget" figure (spec §8.3).
+    """
+    groups, _, _, total_unresolved = build_index(solmate_facts, solmate_flows)
+    expected = sum(f.unresolved_count for f in solmate_flows)
+    assert total_unresolved == expected
+    # Sanity: Solmate has Unresolved descendants somewhere (low-level calls in
+    # SafeTransferLib, Yul dynamic dispatch in CREATE3/SSTORE2). If this is 0
+    # the fixture has drifted in a way that hides the v0.8.0 metric.
+    assert total_unresolved > 0
+    # Every group's entry points should expose unresolved_count and max_depth.
+    saw_one = False
+    for group in groups:
+        for contract in group.contracts:
+            for ep in (
+                *contract.mutating_entry_points,
+                *contract.read_only_entry_points,
+            ):
+                saw_one = True
+                assert ep.unresolved_count >= 0
+                assert ep.max_depth >= 0
+    assert saw_one
+
+
+def test_build_index_contract_entry_section_counts(
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Each ``_ContractEntry`` exposes ``mutating_count`` and ``read_only_count``
+    equal to the length of the corresponding entry-point tuple."""
+    groups, _, _, _ = build_index(solmate_facts, solmate_flows)
+    for group in groups:
+        for contract in group.contracts:
+            assert contract.mutating_count == len(contract.mutating_entry_points)
+            assert contract.read_only_count == len(contract.read_only_entry_points)
+
+
+def test_build_index_entry_metadata_matches_source_flow(
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Each ``_EntryPointEntry`` carries the unresolved_count and max_depth
+    of its source Flow."""
+    by_url_id = {f.entry_point_invoker_canonical_name: f for f in solmate_flows}
+    groups, _, _, _ = build_index(solmate_facts, solmate_flows)
+    saw_one = False
+    for group in groups:
+        for contract in group.contracts:
+            for ep in (
+                *contract.mutating_entry_points,
+                *contract.read_only_entry_points,
+            ):
+                src = by_url_id[ep.url_id]
+                assert ep.unresolved_count == src.unresolved_count
+                assert ep.max_depth == src.max_depth
+                saw_one = True
+    assert saw_one
+
+
+def test_index_route_passes_scope_and_total_unresolved(
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """The ``/`` route exposes ``total_unresolved`` and the active ``Scope``
+    to the template's render context.
+
+    We probe the context via Flask's ``context_processor`` mechanism: a
+    test-installed processor captures the keys it sees, then the test
+    asserts on that capture. This keeps the test focused on data-flow
+    plumbing (Stage 2's contract) rather than on rendered HTML (Stage 3's).
+    """
+    from solidity_flow_navigator.flow.scope import Scope
+
+    custom_scope = Scope(
+        exclude_paths=("**/*.t.sol",),
+        exclude_contracts=("*Mock*",),
+        inline_libraries=(),
+        stub_paths=("src/utils/dense/**",),
+    )
+    app = create_app(solmate_facts, solmate_flows, scope=custom_scope)
+    app.config.update(TESTING=True)
+
+    captured: dict[str, object] = {}
+
+    @app.context_processor
+    def _capture() -> dict[str, object]:
+        # No-op processor; capture happens via before_render hook below.
+        return {}
+
+    # Flask doesn't have a "before_render" hook; the cleanest way to peek at
+    # what the route passed is to monkeypatch render_template inside this
+    # module. Done locally to keep the rest of the suite untouched.
+    import solidity_flow_navigator.serve.app as app_mod
+
+    original = app_mod.render_template
+
+    def _spy(template_name: str, **ctx: object) -> str:
+        captured.update(ctx)
+        return original(template_name, **ctx)
+
+    app_mod.render_template = _spy
+    try:
+        rv = app.test_client().get("/")
+    finally:
+        app_mod.render_template = original
+
+    assert rv.status_code == 200
+    assert "total_unresolved" in captured
+    assert isinstance(captured["total_unresolved"], int)
+    assert "scope" in captured
+    assert captured["scope"] is custom_scope
+
+
+# -- v0.8.0 index rendering (Stage 3 HTML output) ---------------------------
+
+
+def test_index_header_renders_three_counts(client: FlaskClient) -> None:
+    """Spec §8.3 index header block: three right-aligned counts with the
+    numeric values in default text color and labels in --fg-muted chrome.
+    We assert each count is present in the rendered HTML alongside its
+    label. Exact numeric values come from the fixture state — we only
+    check that each ``.count-value`` / ``.count-label`` pair exists.
+    """
+    rv = client.get("/")
+    assert rv.status_code == 200
+    body = rv.get_data(as_text=True)
+    # Header block present with the three labels in the canonical order.
+    assert '<header class="index-header">' in body
+    assert '<span class="count-label">contracts</span>' in body
+    assert '<span class="count-label">entry points</span>' in body
+    assert '<span class="count-label">unresolved</span>' in body
+
+
+def test_index_header_counts_match_build_index_totals(
+    client: FlaskClient,
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """The numeric values in the header match the totals build_index
+    returned. Walks build_index directly to avoid pinning concrete numbers
+    that drift with Solmate."""
+    _, total_eps, total_contracts, total_unresolved = build_index(
+        solmate_facts, solmate_flows
+    )
+    rv = client.get("/")
+    body = rv.get_data(as_text=True)
+    assert (
+        f'<span class="count-value">{total_contracts}</span>' in body
+    ), f"contracts count {total_contracts} missing from header"
+    assert (
+        f'<span class="count-value">{total_eps}</span>' in body
+    ), f"entry points count {total_eps} missing from header"
+    assert (
+        f'<span class="count-value">{total_unresolved}</span>' in body
+    ), f"unresolved count {total_unresolved} missing from header"
+
+
+def test_index_scope_line_renders_excluded_and_stub_paths(
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Scope summary line renders excluded path globs from the active Scope
+    and the stub paths list, with the glob values themselves visible as
+    ``<code class="scope-glob">`` so the CSS can color them default-on-muted
+    (spec §8.3)."""
+    from solidity_flow_navigator.flow.scope import Scope
+
+    scope = Scope(
+        exclude_paths=("**/*.t.sol", "**/mocks/**"),
+        exclude_contracts=(),
+        inline_libraries=(),
+        stub_paths=("src/utils/dense/**",),
+    )
+    app = create_app(solmate_facts, solmate_flows, scope=scope)
+    app.config.update(TESTING=True)
+    rv = app.test_client().get("/")
+    assert rv.status_code == 200
+    body = rv.get_data(as_text=True)
+
+    # The literal "Scope" prefix appears in muted chrome.
+    assert '<span class="scope-chrome">Scope</span>' in body
+    # Both exclude globs render as scope-glob elements.
+    assert '<code class="scope-glob">**/*.t.sol</code>' in body
+    assert '<code class="scope-glob">**/mocks/**</code>' in body
+    # Stub path renders as scope-glob too.
+    assert '<code class="scope-glob">src/utils/dense/**</code>' in body
+    # When stubs are configured, the "none" sentinel must NOT appear.
+    assert '<span class="scope-none">none</span>' not in body
+
+
+def test_index_scope_line_renders_none_when_no_stubs(
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Spec §8.3: when no stubs are active, the literal word ``none``
+    renders in default text color in place of the stub list."""
+    from solidity_flow_navigator.flow.scope import Scope
+
+    scope = Scope(
+        exclude_paths=("**/*.t.sol",),
+        exclude_contracts=(),
+        inline_libraries=(),
+        stub_paths=(),
+    )
+    app = create_app(solmate_facts, solmate_flows, scope=scope)
+    app.config.update(TESTING=True)
+    rv = app.test_client().get("/")
+    body = rv.get_data(as_text=True)
+    # The "none" sentinel is wrapped in .scope-none so the CSS can paint it
+    # in default text color rather than the surrounding muted chrome.
+    assert '<span class="scope-none">none</span>' in body
+
+
+def test_index_section_count_suffix_matches_entry_count(
+    client: FlaskClient,
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Spec §8.3: each ``Mutating`` and ``Read-only`` section heading carries
+    a count suffix in the form ``Mutating · 14`` matching that section's
+    entry-point cardinality. Walks build_index for the authoritative counts
+    and verifies the rendered headings include them."""
+    groups, _, _, _ = build_index(solmate_facts, solmate_flows)
+    rv = client.get("/")
+    body = rv.get_data(as_text=True)
+    asserted_at_least_one_of_each = {"Mutating": False, "Read-only": False}
+    for group in groups:
+        for contract in group.contracts:
+            if contract.mutating_count:
+                expected = f"Mutating · {contract.mutating_count}"
+                assert expected in body, (
+                    f"section heading {expected!r} missing for " f"{contract.name}"
+                )
+                asserted_at_least_one_of_each["Mutating"] = True
+            if contract.read_only_count:
+                expected = f"Read-only · {contract.read_only_count}"
+                assert expected in body, (
+                    f"section heading {expected!r} missing for " f"{contract.name}"
+                )
+                asserted_at_least_one_of_each["Read-only"] = True
+    assert all(asserted_at_least_one_of_each.values()), (
+        "fixture exercised only one bucket; coverage of the section count "
+        "suffix is incomplete"
+    )
+
+
+def test_index_per_entry_metadata_renders_in_all_four_cases(
+    client: FlaskClient,
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Spec §8.3 per-entry metadata column. For each bucket (mutating /
+    read-only) and each branch (unresolved-present / unresolved-absent),
+    assert the rendered HTML matches the rule:
+
+      - unresolved_count > 0 → ``N unr · dN``
+      - unresolved_count == 0 → ``dN``
+
+    Symmetric across mutability. Walks every entry in build_index's output
+    so the rule is verified at scale, not just on cherry-picked cases."""
+    groups, _, _, _ = build_index(solmate_facts, solmate_flows)
+    rv = client.get("/")
+    body = rv.get_data(as_text=True)
+
+    covered = {
+        ("mutating", "with_unr"): False,
+        ("mutating", "without_unr"): False,
+        ("read-only", "with_unr"): False,
+        ("read-only", "without_unr"): False,
+    }
+    for group in groups:
+        for contract in group.contracts:
+            for bucket_label, entries in (
+                ("mutating", contract.mutating_entry_points),
+                ("read-only", contract.read_only_entry_points),
+            ):
+                for ep in entries:
+                    depth_tag = f'<span class="meta-depth">d{ep.max_depth}</span>'
+                    assert (
+                        depth_tag in body
+                    ), f"depth tag {depth_tag!r} missing for {ep.url_id}"
+                    if ep.unresolved_count > 0:
+                        unr_tag = (
+                            f'<span class="meta-unresolved">'
+                            f"{ep.unresolved_count} unr</span>"
+                        )
+                        assert (
+                            unr_tag in body
+                        ), f"unresolved tag {unr_tag!r} missing for {ep.url_id}"
+                        covered[(bucket_label, "with_unr")] = True
+                    else:
+                        covered[(bucket_label, "without_unr")] = True
+    missing = [case for case, hit in covered.items() if not hit]
+    assert not missing, (
+        f"fixture did not exercise these (bucket, unr-state) cases: {missing}; "
+        f"the symmetric-across-mutability rule cannot be fully validated"
+    )
+
+
+def test_index_per_entry_metadata_omits_unresolved_when_zero(
+    client: FlaskClient,
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Negative-case sanity for the previous test: entries with
+    ``unresolved_count == 0`` must NOT render a ``0 unr`` annotation
+    anywhere (the conditional in the template is ``> 0``, not ``>= 0``)."""
+    # The literal string "0 unr" wrapped in .meta-unresolved should never
+    # appear — that would indicate the conditional flipped.
+    rv = client.get("/")
+    body = rv.get_data(as_text=True)
+    assert '<span class="meta-unresolved">0 unr</span>' not in body
+
+
+def test_index_privacy_footer_present(client: FlaskClient) -> None:
+    """Spec §8.3: privacy footer at the bottom of the page documents the
+    localhost-only execution model. Exact text is required so the auditor
+    sees the canonical assurance phrasing on every render."""
+    rv = client.get("/")
+    body = rv.get_data(as_text=True)
+    assert '<p class="privacy-footer">' in body
+    assert (
+        "All analysis local · code never uploaded · server bound to 127.0.0.1" in body
+    )
 
 
 # -- flow page --------------------------------------------------------------

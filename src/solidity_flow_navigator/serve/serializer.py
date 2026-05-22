@@ -48,6 +48,8 @@ def serialize_flow(flow: Flow) -> dict[str, Any]:
         "entry_point_contract_name": flow.entry_point_contract_name,
         "entry_point_function_name": flow.entry_point_function_name,
         "signature_suffix": signature_suffix,
+        "unresolved_count": flow.unresolved_count,
+        "max_depth": flow.max_depth,
         "root": _serialize_node(flow.root),
     }
 
