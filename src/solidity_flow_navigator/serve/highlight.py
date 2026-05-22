@@ -54,6 +54,33 @@ def highlight_solidity(source: str) -> str:
     return highlight(source, _LEXER, _FORMATTER)
 
 
+def highlight_signature(
+    name: str, signature_suffix: str, mutability_suffix: str
+) -> str:
+    """Return Pygments-highlighted HTML for an entry-point declaration.
+
+    Used by the index page (§8.3). Builds the synthetic Solidity declaration
+    ``function {name}{signature_suffix} {mutability_suffix}`` and lexes it
+    with the same Solidity lexer used for source bodies, so the function
+    name lands in the ``.nv`` token slot (purple) and types/keywords land
+    in ``.kt``/``.k`` (dark blue), inheriting the existing ``main.css``
+    palette without per-page color rules.
+
+    ``signature_suffix`` is the parenthesised parameter list (``"(...)"`` or
+    similar) extracted from the canonical name; pass ``""`` if the entry
+    has no parens. ``mutability_suffix`` is ``"external"`` for mutating
+    entries and ``"external view"`` for read-only entries — derived from
+    the section the entry sits in, not from the raw FunctionNode flags
+    (this matches the §8.3 convention that the index declaration form is
+    a render-time construction, not a data-model field).
+
+    Returns the bare span sequence (no wrapping element). The trailing
+    newline Pygments appends is stripped so the output stays inline-safe.
+    """
+    declaration = f"function {name}{signature_suffix} {mutability_suffix}"
+    return highlight(declaration, _LEXER, _FORMATTER).rstrip("\n")
+
+
 def write_pygments_css(static_dir: Path) -> Path:
     """Regenerate ``static_dir/css/pygments.css`` and return its path.
 

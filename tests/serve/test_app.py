@@ -190,6 +190,96 @@ def test_index_omits_empty_section_for_single_kind_contract(
     ), f"{absent} placeholder header should be omitted for {contract_name}"
 
 
+# -- index signature highlighting (v0.7.0, spec §8.3) -----------------------
+
+
+def test_index_entry_signatures_render_through_pygments(
+    client: FlaskClient,
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Spec §8.3 (v0.7.0): each index entry's signature lands under a
+    ``<code class="src">`` and contains Pygments token spans.
+
+    Probes the rendered HTML for one known mutating entry (``ERC4626.deposit``)
+    and one known read-only entry (``ERC4626.totalAssets``) to confirm:
+      * the ``<code class="src">`` wrapper is present so the existing
+        ``.src .X`` palette in ``main.css`` colours the signature;
+      * the function name lands in the ``.nv`` token slot (purple per
+        ``--tok-name``);
+      * the synthetic ``function`` keyword and ``external`` modifier land in
+        the ``.kt`` token slot (dark blue per ``--tok-keyword``);
+      * mutating vs read-only entries render with the expected mutability
+        suffix (``external`` vs ``external view``).
+    """
+    rv = client.get("/")
+    assert rv.status_code == 200
+    body = rv.get_data(as_text=True)
+
+    erc4626_block = _extract_contract_block(body, "ERC4626")
+
+    # The wrapper class is what activates the existing .src .X palette.
+    assert '<code class="src">' in erc4626_block
+
+    # Function names in the .nv slot (purple), one for each entry rendered
+    # via the Pygments pipeline. Solmate's ERC4626 has many entries; we just
+    # need a sample of each kind.
+    assert (
+        '<span class="nv">deposit</span>' in erc4626_block
+    ), "mutating entry-point function name should land in the .nv token slot"
+    assert (
+        '<span class="nv">totalAssets</span>' in erc4626_block
+    ), "read-only entry-point function name should land in the .nv token slot"
+
+    # The synthetic `function` keyword lexes as .kt under the Solidity lexer.
+    assert '<span class="kt">function</span>' in erc4626_block
+
+    # Mutability suffix differs by section: mutating → `external`,
+    # read-only → `external view`. We search the whole body rather than
+    # the ERC4626 block alone to allow either to land in either; the
+    # presence of both strings somewhere in the index is the contract.
+    assert '<span class="kt">external</span>' in body
+    # The literal `view` text appears in read-only entries; the Solidity
+    # lexer leaves it as plain text rather than tagging it as a keyword,
+    # so we look for the bare substring after `external`.
+    assert 'external</span><span class="w"> </span>view' in body
+
+
+def test_index_signature_html_set_on_entry_points(
+    solmate_facts: RepoFacts,
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Sanity: every ``_EntryPointEntry`` carries a non-empty ``signature_html``
+    that contains the function name inside a ``.nv`` span.
+
+    Walks ``build_index``'s output directly rather than scraping HTML, so a
+    template refactor can't silently mask a regression in the underlying
+    data shape.
+    """
+    groups, _, _ = build_index(solmate_facts, solmate_flows)
+    seen_at_least_one = False
+    for group in groups:
+        for contract in group.contracts:
+            for ep in (
+                *contract.mutating_entry_points,
+                *contract.read_only_entry_points,
+            ):
+                seen_at_least_one = True
+                # Function name is the part of full_name before the first `(`.
+                name = ep.function_full_name.split("(", 1)[0]
+                if not name:
+                    # receive/fallback / no-paren shapes — skip name assert.
+                    continue
+                assert (
+                    ep.signature_html
+                ), f"signature_html empty for {ep.contract_name}.{name}"
+                assert f'<span class="nv">{name}</span>' in ep.signature_html, (
+                    f"function name {name!r} missing from .nv slot in "
+                    f"{ep.signature_html!r}"
+                )
+    assert seen_at_least_one, "no entry points walked; fixture may be broken"
+
+
 # -- flow page --------------------------------------------------------------
 
 

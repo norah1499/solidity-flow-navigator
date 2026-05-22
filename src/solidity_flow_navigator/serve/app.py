@@ -30,7 +30,7 @@ from markupsafe import Markup
 
 from ..analysis.types import RepoFacts
 from ..flow.types import Flow
-from .highlight import write_pygments_css
+from .highlight import highlight_signature, write_pygments_css
 from .serializer import serialize_flow
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,13 @@ class _EntryPointEntry:
     url_id: str
     contract_name: str
     function_full_name: str
+    # Pygments-rendered HTML for the declaration form
+    # ``function name(types) external[ view]``. The template inlines this
+    # under a ``<code class="src">`` so the existing ``.src .X`` palette
+    # in ``main.css`` colours the function name purple and keywords/types
+    # dark blue — same visual language used inside Flow-page source bodies.
+    # See spec §8.3.
+    signature_html: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,10 +129,12 @@ def build_index(
     """
     contract_paths = _contract_source_paths(facts)
 
-    # group_label -> contract_name -> list[(flow, _EntryPointEntry)]
-    # We carry the Flow alongside the entry so the mutability partition below
-    # can read ``flow.root.view`` / ``flow.root.pure`` without re-walking flows.
-    by_group: dict[str, dict[str, list[tuple[Flow, _EntryPointEntry]]]] = {
+    # group_label -> contract_name -> list[(flow, full_name)]
+    # The _EntryPointEntry itself is built later, at partition time, because
+    # ``signature_html`` depends on the bucket the entry lands in (mutating
+    # entries render with ``external``; read-only entries render with
+    # ``external view`` — see §8.3 and the v0.7.0 spec patch).
+    by_group: dict[str, dict[str, list[tuple[Flow, str]]]] = {
         label: {} for label in GROUP_ORDER
     }
 
@@ -139,16 +148,7 @@ def build_index(
         label = categorize_path(path)
         bucket = by_group[label].setdefault(cn, [])
         full_name = flow.entry_point_function_name + _signature_suffix(flow)
-        bucket.append(
-            (
-                flow,
-                _EntryPointEntry(
-                    url_id=flow.entry_point_invoker_canonical_name,
-                    contract_name=cn,
-                    function_full_name=full_name,
-                ),
-            )
-        )
+        bucket.append((flow, full_name))
         total += 1
 
     groups: list[_GroupEntry] = []
@@ -156,11 +156,24 @@ def build_index(
     for label in GROUP_ORDER:
         contracts: list[_ContractEntry] = []
         for cn in sorted(by_group[label]):
-            pairs = sorted(by_group[label][cn], key=lambda fe: fe[1].function_full_name)
+            pairs = sorted(by_group[label][cn], key=lambda fn: fn[1])
             mutating: list[_EntryPointEntry] = []
             read_only: list[_EntryPointEntry] = []
-            for flow, ep in pairs:
-                if flow.root.view or flow.root.pure:
+            for flow, full_name in pairs:
+                is_read_only = flow.root.view or flow.root.pure
+                mutability = "external view" if is_read_only else "external"
+                sig_html = highlight_signature(
+                    flow.entry_point_function_name,
+                    _signature_suffix(flow),
+                    mutability,
+                )
+                ep = _EntryPointEntry(
+                    url_id=flow.entry_point_invoker_canonical_name,
+                    contract_name=cn,
+                    function_full_name=full_name,
+                    signature_html=sig_html,
+                )
+                if is_read_only:
                     read_only.append(ep)
                 else:
                     mutating.append(ep)

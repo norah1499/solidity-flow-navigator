@@ -201,6 +201,15 @@ code, pre { font-family: var(--font-mono); }
   font-size: 12px;
 }
 
+/* v0.7.0: index entry signatures render through Pygments under
+   `<code class="src">`. pygments.css drops `.src { background: #f8f8f8; }`
+   on every `.src` element; node bodies override it to transparent via
+   `.node-body.src` above, and index entries need the same override or
+   they'd carry a light-gray pill behind the contract.function text. */
+.entry-link code.src {
+  background: transparent;
+}
+
 .entry-link:hover code,
 .entry-link:focus code {
   text-decoration: underline;
@@ -419,6 +428,61 @@ body.flow-page .flow-header {
   background: transparent;
   color: var(--fg-muted);
   border: 0.5px dashed var(--node-external-border);
+}
+
+/* v0.7.0 title bar: dedicated header row above the source body carrying the
+   short-form title on a slightly darker cream background, separated from the
+   body by a thin dark-ink rule. Negative margins counteract the .node's
+   `padding: 0.75rem 1rem` so the bar spans edge-to-edge. The bar is rendered
+   for both FunctionNode and modifier FunctionNode renders; modifier nodes
+   carry the same cream chrome on their blue interior — the contrast is
+   intentional, matching the cream-on-cream FunctionNode appearance. */
+.node-title-bar {
+  margin: -0.75rem -1rem 0 -1rem;
+  padding: 0.4rem 1rem;
+  background: #f1ede0;
+  border-bottom: 0.5px solid #2c2c2c;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.node-title-bar code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* v0.7.0 body wrap: flex container holding the .line-gutter to the left of
+   the source <pre>. `align-items: flex-start` shares a top edge between the
+   two so the first line number aligns with the first source line. The top
+   margin separates the body block from the title bar's bottom border. */
+.node-body-wrap {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+/* v0.7.0 line gutter: absolute source-file line numbers, right-aligned, in
+   a muted gray. Line-height MUST match .node-body.src exactly so each
+   .line-num lines up row-for-row with its source line. font-variant-numeric:
+   tabular-nums keeps the column width stable as digit counts vary
+   (e.g. line 99 → 100). user-select: none keeps the numbers out of
+   copy/paste of the source body. */
+.line-gutter {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  color: #b5b2a8;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.line-num {
+  display: block;
+  line-height: 1.65;
 }
 
 .node-body.src {

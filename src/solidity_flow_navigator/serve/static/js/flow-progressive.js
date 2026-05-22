@@ -121,15 +121,24 @@
       "div",
       "node node--function" + (node.is_modifier ? " node--modifier" : ""),
     );
-    const head = el("div", "node-head");
-    head.appendChild(
+
+    // v0.7.0 title bar (spec §10.2). The short-form title lands in its own
+    // row above the source body, painted on a slightly darker cream than
+    // the node interior with a thin dark-ink rule separating it from the
+    // body. Mirrors the same construction in flow.js (legacy renderer).
+    const titleBar = el("div", "node-title-bar");
+    titleBar.appendChild(
       el(
-        "span",
-        "node-title",
+        "code",
+        null,
         node.invoked_via_contract_name + "." + shortenSignature(node.full_name),
       ),
     );
+    wrap.appendChild(titleBar);
 
+    // Badges row: only emitted when at least one badge applies. An empty
+    // .node-head would otherwise carry its `margin-bottom: 0.5rem` for no
+    // visible content.
     const badges = el("span", "node-badges");
     if (node.is_modifier) badges.appendChild(el("span", "badge badge-modifier", "modifier"));
     if (node.invoked_via_super) badges.appendChild(el("span", "badge badge-super", "super"));
@@ -138,14 +147,38 @@
         el("span", "badge badge-inherited", "inherited from " + node.declarer_contract_name),
       );
     }
-    head.appendChild(badges);
-    wrap.appendChild(head);
+    if (badges.children.length > 0) {
+      const head = el("div", "node-head");
+      head.appendChild(badges);
+      wrap.appendChild(head);
+    }
 
     if (node.source_html) {
+      // v0.7.0 line-number gutter (spec §10.2). One <span class="line-num">
+      // per source line, aligned row-for-row with the <pre> via a shared
+      // `line-height: 1.65`. The gutter sits BESIDE the <pre> (inside a
+      // flex .node-body-wrap), not inside it, so per-line edge anchoring
+      // via `.src-line[data-line=N]` `getBoundingClientRect` measurements
+      // remains undisturbed — the <pre>'s internal offsetTop chain is
+      // unchanged, only the surrounding .node grows vertically by the
+      // title bar height (which dagre absorbs via getBoundingClientRect).
+      const html = node.source_html;
+      const sourceLineCount = html.split("\n").length;
+      const baseLine = node.source_location.lines[0];
+
+      const bodyWrap = el("div", "node-body-wrap");
+      const gutter = el("div", "line-gutter");
+      for (let i = 0; i < sourceLineCount; i++) {
+        gutter.appendChild(el("span", "line-num", String(baseLine + i)));
+      }
+      bodyWrap.appendChild(gutter);
+
       const pre = el("pre", "node-body src");
       pre.innerHTML = wrapCallLines(node);
       colorizeCallNamesAcrossLines(pre, node);
-      wrap.appendChild(pre);
+      bodyWrap.appendChild(pre);
+
+      wrap.appendChild(bodyWrap);
     }
 
     if (node.builtins_used && node.builtins_used.length) {

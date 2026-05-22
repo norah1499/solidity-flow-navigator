@@ -27,7 +27,7 @@
           {% for ep in contract.mutating_entry_points %}
           <li>
             <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
-              <code>{{ ep.contract_name }}.{{ ep.function_full_name }}</code>
+              <code class="src">{{ ep.contract_name }}.{{ ep.signature_html | safe }}</code>
             </a>
           </li>
           {% endfor %}
@@ -41,7 +41,7 @@
           {% for ep in contract.read_only_entry_points %}
           <li>
             <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
-              <code>{{ ep.contract_name }}.{{ ep.function_full_name }}</code>
+              <code class="src">{{ ep.contract_name }}.{{ ep.signature_html | safe }}</code>
             </a>
           </li>
           {% endfor %}
