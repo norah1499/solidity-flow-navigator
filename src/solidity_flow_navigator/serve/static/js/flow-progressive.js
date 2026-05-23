@@ -393,245 +393,78 @@
     });
   }
 
-  // v0.6 direction-model side assignment (spec §10.3 Rule 2).
+  // v0.9 direction-model side assignment (spec §10.3).
   //
-  // Replaces v0.5's strict inheritance. For every visible non-root
-  // non-modifier node we evaluate both candidate sides relative to the
-  // immediate parent:
-  //   - feasibility = placing the node on that side does not introduce
-  //     a crossing with any currently-visible edge (no-cross constraint);
-  //   - if both feasible → pick the side with less vertical extent in the
-  //     parent's own subtree (per-parent auto-balance; ties → right);
-  //   - if only one feasible → pick it;
-  //   - if neither feasible → inherit the parent's own side relative to its
-  //     own ancestor (fallback that guarantees a placement exists).
+  // Three rules, applied in order, no decisions deferred to runtime
+  // feasibility checks:
   //
-  // Modifier-subtree descendants (3d) go through the same algorithm — the
-  // no-cross constraint typically biases them leftward emergent from the
-  // parent body sitting to the modifier's right, not from a hard-coded rule.
+  //   Rule 1 (first-level expansions, §10.3 item 1) — children of the
+  //   root auto-balance by vertical extent: measure each side's
+  //   currently-sided non-modifier-subtree descendants of the root
+  //   (lastNodeRects snapshot), place the new child on the side with
+  //   less extent. Ties → right.
   //
-  // Modifiers themselves still get no side entry (manual upper-left
-  // placement separately per §11.6, unchanged from v0.5).
+  //   Rule 2 (deeper expansions, §10.3 item 2) — inherit the immediate
+  //   parent's side. Once a subtree starts on a side at first level, all
+  //   descendants stay on that side. v0.5 inheritance restored after
+  //   v0.6's per-parent auto-balance proved disorienting for chained
+  //   call sequences (zigzag across sides broke the eye's chain).
+  //
+  //   Rule 3 (modifier subtree descendants, §10.3 item 3) — modifier
+  //   itself has no sideById entry (manual upper-left placement,
+  //   §11.6). Modifier subtree descendants are treated as if the
+  //   modifier were a left-side parent: they inherit "left" structurally
+  //   and extend leftward from the modifier's position.
+  //
+  // The "no retroactive reposition" invariant from v0.5/v0.6 is
+  // preserved: sideById entries are write-once. Auto-balance recomputes
+  // its metric at each first-level expansion to reflect the current
+  // visual state, but does not move previously-placed first-level
+  // subtrees across sides.
   function assignSide(id) {
     if (id === flow.root.__id) return;
     const node = nodesById.get(id);
-    if (isModifierNode(node)) return;
-    if (sideById.has(id)) return; // idempotent — spec: no retroactive reposition
+    if (isModifierNode(node)) return; // modifier itself: manual placement
+    if (sideById.has(id)) return; // idempotent
+
+    // Rule 3: any descendant of a modifier is structurally left.
+    if (inModifierSubtree(id)) {
+      sideById.set(id, "left");
+      return;
+    }
 
     const pid = parentIdOf(id);
 
-    // Phase 1: evaluate feasibility on each candidate side.
-    const leftFeasible = isFeasibleSide(id, "left");
-    const rightFeasible = isFeasibleSide(id, "right");
-
-    let side;
-    if (leftFeasible && rightFeasible) {
-      // Both feasible → pick less-extent side (ties → right).
-      const lExt = parentSideExtent(pid, "left");
-      const rExt = parentSideExtent(pid, "right");
-      side = rExt <= lExt ? "right" : "left";
-    } else if (leftFeasible) {
-      side = "left";
-    } else if (rightFeasible) {
-      side = "right";
-    } else {
-      // Fallback: inherit parent's own side relative to its ancestor.
-      side = inheritedSide(pid);
+    // Rule 1: first-level child of root → auto-balance by extent.
+    if (pid === flow.root.__id) {
+      const lExt = rootSideExtent("left");
+      const rExt = rootSideExtent("right");
+      sideById.set(id, rExt <= lExt ? "right" : "left");
+      return;
     }
 
-    sideById.set(id, side);
+    // Rule 2: deeper expansion → inherit parent.
+    sideById.set(id, sideById.get(pid) || "right");
   }
 
-  // Per-parent vertical extent of one side's currently-visible descendants,
-  // measured from the previous layout snapshot (lastNodeRects). Returns 0
-  // when no descendants exist on that side yet.
-  //
-  // For the root, the metric scopes to all first-level non-modifier-subtree
-  // sided descendants (matching v0.5's root auto-balance). For non-root
-  // parents, the metric scopes to descendants whose branch starts on the
-  // queried side relative to this parent.
-  function parentSideExtent(pid, side) {
-    if (pid === flow.root.__id) {
-      // Root metric: same as v0.5 — measure the visible subtree extent on
-      // each side of the root, excluding modifier subtrees (which sit
-      // upper-left of root and are not in the left/right balance).
-      let minY = Infinity, maxY = -Infinity;
-      sideById.forEach((s, vid) => {
-        if (s !== side) return;
-        if (inModifierSubtree(vid)) return;
-        const r = lastNodeRects.get(vid);
-        if (!r) return;
-        if (r.top < minY) minY = r.top;
-        if (r.top + r.h > maxY) maxY = r.top + r.h;
-      });
-      return minY === Infinity ? 0 : maxY - minY;
-    }
-    // Non-root parent: descendants of pid whose branch starts on the
-    // queried side of pid. "Branch starts on side S" means the ancestor of
-    // the descendant that is a direct child of pid has sideById === S.
-    const prefix = pid + "/";
-    let minY = Infinity, maxY = -Infinity;
-    visibleIds.forEach((vid) => {
-      if (vid === pid) return;
-      if (!vid.startsWith(prefix)) return;
-      const direct = directChildOf(pid, vid);
-      if (!direct) return;
-      if ((sideById.get(direct) || "right") !== side) return;
+  // Root-only side-extent metric for Rule 1 (spec §10.3 item 1).
+  // Measures the vertical span of each side's currently-sided
+  // descendants of the root, excluding modifier subtrees (which sit
+  // upper-left and are not part of the left/right balance). Returns 0
+  // when no descendants exist on that side yet (first expansion of the
+  // session → ties resolve right per the spec).
+  function rootSideExtent(side) {
+    let minY = Infinity;
+    let maxY = -Infinity;
+    sideById.forEach((s, vid) => {
+      if (s !== side) return;
+      if (inModifierSubtree(vid)) return;
       const r = lastNodeRects.get(vid);
       if (!r) return;
       if (r.top < minY) minY = r.top;
       if (r.top + r.h > maxY) maxY = r.top + r.h;
     });
     return minY === Infinity ? 0 : maxY - minY;
-  }
-
-  // Walk vid up to the ancestor that is a direct child of pid. Returns
-  // that ancestor's id, or null if vid is not a descendant of pid.
-  function directChildOf(pid, vid) {
-    if (!vid.startsWith(pid + "/")) return null;
-    const rest = vid.slice(pid.length + 1);
-    const slash = rest.indexOf("/");
-    return slash === -1 ? vid : pid + "/" + rest.slice(0, slash);
-  }
-
-  // Inheritance fallback (spec §10.3 Rule 2 last bullet).
-  // Returns the side the new node should inherit when neither candidate is
-  // feasible. Walks up: if parent is non-root non-modifier with a side,
-  // use it; if parent is a modifier, use "left" (modifier subtree implicit
-  // direction); if parent is root, use root auto-balance (the v0.5 default
-  // when the algorithm runs out of context).
-  function inheritedSide(pid) {
-    if (pid === flow.root.__id) {
-      const lExt = parentSideExtent(pid, "left");
-      const rExt = parentSideExtent(pid, "right");
-      return rExt <= lExt ? "right" : "left";
-    }
-    const pnode = nodesById.get(pid);
-    if (isModifierNode(pnode)) return "left";
-    return sideById.get(pid) || "right";
-  }
-
-  // No-cross feasibility predictor (spec §10.3 Rule 2).
-  //
-  // Snapshot-based approximation: predict where the new node would land if
-  // placed on `side` of its parent, draw a straight line from the parent's
-  // anchor on that side to the predicted node center, and test that line
-  // against every currently-visible edge's straight-line proxy. Returns
-  // true if zero intersections.
-  //
-  // Approximation is conservative: dagre's curves bend within the
-  // straight-line bounding rectangle, so a straight-line miss implies a
-  // curve miss; a straight-line hit may or may not imply a curve hit but
-  // the algorithm errs on the side of avoiding the configuration. The
-  // alternative (full trial layout) would be exact but cost an extra
-  // dagre.layout() call per assignment.
-  //
-  // On the very first relayout (no snapshot yet) every side is feasible —
-  // there are no existing edges to cross.
-  function isFeasibleSide(id, side) {
-    if (lastNodeRects.size === 0) return true;
-    const pid = parentIdOf(id);
-    const parentRect = lastNodeRects.get(pid);
-    if (!parentRect) return true;
-    const newRect = predictedRect(id, side);
-    if (!newRect) return true;
-    const newEdge = predictedEdge(parentRect, newRect, side);
-    for (const e of currentVisibleEdgeProxies()) {
-      if (segmentsIntersect(newEdge.p1, newEdge.p2, e.p1, e.p2)) return false;
-    }
-    return true;
-  }
-
-  // Where would `id` land if placed on `side` of its parent, using the
-  // previous layout snapshot? We use an estimated size (the actual size
-  // depends on DOM measurement which happens inside relayout). For
-  // already-rendered nodes, we use measureDom; for not-yet-rendered ones we
-  // estimate ~node defaults.
-  function predictedRect(id, side) {
-    const pid = parentIdOf(id);
-    const parentRect = lastNodeRects.get(pid);
-    if (!parentRect) return null;
-    const sizeEst = predictedSize(id);
-    // X: side-relative ranksep from parent's edge.
-    const RANKSEP = 80;
-    const left = side === "left"
-      ? parentRect.left - RANKSEP - sizeEst.w
-      : parentRect.left + parentRect.w + RANKSEP;
-    // Y: below the existing subtree on that side, or at parent's center if empty.
-    let bottomOnSide = parentRect.top + parentRect.h / 2 - sizeEst.h / 2;
-    const prefix = pid + "/";
-    visibleIds.forEach((vid) => {
-      if (vid === pid) return;
-      if (!vid.startsWith(prefix)) return;
-      const direct = directChildOf(pid, vid);
-      if (!direct) return;
-      if ((sideById.get(direct) || "right") !== side) return;
-      const r = lastNodeRects.get(vid);
-      if (!r) return;
-      if (r.top + r.h + 30 > bottomOnSide) bottomOnSide = r.top + r.h + 30; // nodesep
-    });
-    return { left, top: bottomOnSide, w: sizeEst.w, h: sizeEst.h };
-  }
-
-  function predictedSize(id) {
-    const dom = domById.get(id);
-    if (dom) {
-      const r = dom.getBoundingClientRect();
-      return { w: Math.max(80, Math.ceil(r.width)), h: Math.max(40, Math.ceil(r.height)) };
-    }
-    return { w: 240, h: 100 }; // pre-render defaults; rough but only used for prediction
-  }
-
-  function predictedEdge(parentRect, newRect, side) {
-    const px = side === "left" ? parentRect.left : parentRect.left + parentRect.w;
-    const py = parentRect.top + parentRect.h / 2;
-    const cx = newRect.left + newRect.w / 2;
-    const cy = newRect.top + newRect.h / 2;
-    return { p1: { x: px, y: py }, p2: { x: cx, y: cy } };
-  }
-
-  // Snapshot-derived edge list. Each visible non-root node contributes one
-  // straight-line proxy from its parent's anchor on the assigned side to
-  // the node's center. Modifier edges are also included (parent → modifier
-  // at the modifier's right edge).
-  function currentVisibleEdgeProxies() {
-    const out = [];
-    visibleIds.forEach((vid) => {
-      if (vid === flow.root.__id) return;
-      const pid = parentIdOf(vid);
-      if (!pid || !visibleIds.has(pid)) return;
-      const pRect = lastNodeRects.get(pid);
-      const cRect = lastNodeRects.get(vid);
-      if (!pRect || !cRect) return;
-      const node = nodesById.get(vid);
-      if (isModifierNode(node)) {
-        out.push({
-          p1: { x: pRect.left, y: pRect.top + pRect.h / 2 },
-          p2: { x: cRect.left + cRect.w, y: cRect.top + cRect.h / 2 },
-        });
-        return;
-      }
-      const side = sideById.get(vid) || "right";
-      const px = side === "left" ? pRect.left : pRect.left + pRect.w;
-      out.push({
-        p1: { x: px, y: pRect.top + pRect.h / 2 },
-        p2: { x: cRect.left + cRect.w / 2, y: cRect.top + cRect.h / 2 },
-      });
-    });
-    return out;
-  }
-
-  // Standard 4-orientation segment-intersection test. Returns true iff the
-  // open segments p1q1 and p2q2 properly cross (sharing an endpoint is not
-  // a crossing, nor is collinear touching).
-  function segmentsIntersect(p1, q1, p2, q2) {
-    const o = (a, b, c) =>
-      Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
-    const o1 = o(p1, q1, p2);
-    const o2 = o(p1, q1, q2);
-    const o3 = o(p2, q2, p1);
-    const o4 = o(p2, q2, q1);
-    return o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4;
   }
 
   // Walk up tree: is `id` inside any modifier's subtree (or itself a modifier)?
@@ -893,23 +726,26 @@
     // (for the manual cluster placement pass). Mirrors the per-side
     // sibling-stacking logic in placeCluster so the predicted height
     // matches the actual placement.
+    // v0.9 (spec §10.3 item 3): modifier subtree descendants are all
+    // structurally "left" via Rule 3 in assignSide, so this height metric
+    // is a single leftward stack — no per-side bucketing. The function
+    // only ever operates on the modifier subtree (called from the modifier
+    // zone calculation below and from placeClusterSubtree); v0.6's left/
+    // right bucketing existed because the v0.6 modifier subtree could
+    // place descendants on either side under the no-cross constraint.
+    // That constraint is gone; descendants extend leftward only.
     function subtreeHeightManual(id) {
       const selfSize = measureDom(id);
       const node = nodesById.get(id);
       if (!node || node.node_type !== "function") return selfSize.h;
       const kids = (node.children || []).filter((c) => visibleIds.has(c.__id));
       if (kids.length === 0) return selfSize.h;
-      let leftTotal = 0, rightTotal = 0;
-      let leftCount = 0, rightCount = 0;
+      let total = 0;
       kids.forEach((c) => {
-        const s = sideById.get(c.__id) || "left"; // modifier subtree default → left
-        const childH = subtreeHeightManual(c.__id);
-        if (s === "left") { leftTotal += childH; leftCount++; }
-        else              { rightTotal += childH; rightCount++; }
+        total += subtreeHeightManual(c.__id);
       });
-      if (leftCount > 1) leftTotal += (leftCount - 1) * MODIFIER_GAP_Y;
-      if (rightCount > 1) rightTotal += (rightCount - 1) * MODIFIER_GAP_Y;
-      return Math.max(selfSize.h, leftTotal, rightTotal);
+      if (kids.length > 1) total += (kids.length - 1) * MODIFIER_GAP_Y;
+      return Math.max(selfSize.h, total);
     }
 
     const modZoneByParent = new Map(); // pid -> total stacked modifier-cluster height
@@ -994,24 +830,36 @@
       });
     });
 
-    // Manual layout pass for modifier clusters (v0.6).
+    // Manual layout pass for modifier clusters (spec §10.3 item 3, §11.6).
     //
     // For each visible function with one or more visible modifier children,
     // stack the modifier clusters vertically in the upper-left of the
     // parent in declaration order. Each cluster = the modifier itself
-    // (upper-left anchor) plus its visible body-call subtree, placed
-    // recursively using the per-parent auto-balance + no-cross direction
-    // model (§10.3 Rule 2, applied identically to body-call subtrees).
+    // (anchored at parent's left edge minus MODIFIER_GAP_X) plus its
+    // visible body-call subtree, placed recursively leftward per §10.3
+    // item 3 (modifier subtree descendants always extend leftward,
+    // inheriting the modifier's structural "left" side via Rule 3 in
+    // assignSide).
     //
-    // Modifier subtree descendants stay OUT of dagre — v0.5's "lifted
+    // Modifier subtree descendants stay OUT of dagre — the "lifted
     // entirely out of the dagre graph" architecture (§11.6) is preserved.
-    // The change vs. v0.5 is that they are no longer rendered as a manual
-    // vertical column straight down from the modifier; instead the
-    // sideById assignment (already computed in showNode) drives per-parent
-    // placement, with siblings stacked vertically per side. The no-cross
-    // constraint typically biases them leftward (right-side placements
-    // would intersect body-call edges from the parent), but the layout is
-    // no longer hard-locked left.
+    // Under v0.9 inheritance, descendants no longer dance between sides
+    // via the v0.6 no-cross constraint; they're always leftward, so the
+    // placement loop is a simple leftward-stacking pass.
+    //
+    // Band separation (spec §10.3 item 3 last clause): the modifier
+    // cluster occupies the Y range [parent.top, parent.top +
+    // subtreeHeightManual(modifier)] — i.e., from the parent's top edge
+    // downward through the modifier's full leftward-extending subtree.
+    // The parent's body-call LEFT subtree would otherwise collide with
+    // this range (its dagre-assigned Y is near parent.top too). The
+    // collision is resolved by `computeShifts` above, which adds
+    // `extra = max(0, parent.top + parentZone + GAP - child.top)` to
+    // every left-side body-call descendant's Y. After the shift, body-
+    // call left descendants sit at Y >= parent.top + parentZone + GAP —
+    // below the modifier cluster's bottom. Right-side body callees never
+    // collide with the modifier subtree (modifier extends leftward only)
+    // so the shift correctly fires only for `side === "left"`.
 
     function recordRect(id, left, top, w, h) {
       nodeRects.set(id, { x: left + w / 2, y: top + h / 2, w, h, left, top });
@@ -1022,35 +870,24 @@
     }
 
     // Recursively place a modifier-cluster subtree starting at `id` whose
-    // anchor rectangle is (left, top, w, h). Children of `id` are placed
-    // per their sideById assignment, stacked vertically within the side.
-    // Uses subtreeHeightManual (defined above for zone-height calc) to
-    // reserve vertical space for each child's full subtree before stacking
-    // the next sibling.
+    // anchor rectangle is (left, top, w, h). All children extend leftward
+    // (§10.3 item 3), stacked vertically in source order. Uses
+    // subtreeHeightManual to reserve vertical space for each child's full
+    // subtree before stacking the next sibling.
     function placeClusterSubtree(id, left, top, w, h) {
       const node = nodesById.get(id);
       if (!node || node.node_type !== "function") return;
       const kids = (node.children || []).filter((c) => visibleIds.has(c.__id));
       if (kids.length === 0) return;
-      let leftStackTop = top;
-      let rightStackTop = top;
+      let stackTop = top;
       kids.forEach((c) => {
         const cid = c.__id;
-        const side = sideById.get(cid) || "left"; // modifier subtree default
         const cSize = measureDom(cid);
-        let cLeft, cTop;
-        if (side === "left") {
-          cLeft = left - MODIFIER_GAP_X - cSize.w;
-          cTop = leftStackTop;
-        } else {
-          cLeft = left + w + MODIFIER_GAP_X;
-          cTop = rightStackTop;
-        }
+        const cLeft = left - MODIFIER_GAP_X - cSize.w;
+        const cTop = stackTop;
         recordRect(cid, cLeft, cTop, cSize.w, cSize.h);
         placeClusterSubtree(cid, cLeft, cTop, cSize.w, cSize.h);
-        const stride = subtreeHeightManual(cid) + MODIFIER_GAP_Y;
-        if (side === "left") leftStackTop = cTop + stride;
-        else                 rightStackTop = cTop + stride;
+        stackTop = cTop + subtreeHeightManual(cid) + MODIFIER_GAP_Y;
       });
     }
 
@@ -1063,9 +900,8 @@
         const left = parentRect.left - w - MODIFIER_GAP_X;
         const top = stackY;
         recordRect(mid, left, top, w, h);
-        // Place the modifier's body-call subtree (v0.6 promotion) using
-        // per-parent auto-balanced sides. v0.5 placed these as a vertical
-        // column straight down; v0.6 distributes per the side model.
+        // Place the modifier's body-call subtree leftward per §10.3
+        // item 3 (descendants structurally "left" via Rule 3).
         placeClusterSubtree(mid, left, top, w, h);
         // Advance the next modifier in the stack past this entire cluster.
         stackY = top + subtreeHeightManual(mid) + MODIFIER_GAP_Y;
@@ -1147,16 +983,18 @@
       edgesGroup.appendChild(path);
     });
 
-    // Manual edges for modifier clusters.
+    // Manual edges for modifier clusters (spec §10.3 item 3).
     //
-    // Three sub-cases:
+    // Two sub-cases under v0.9 inheritance:
     //  (a) parent → modifier: parent's signature line (where the modifier
     //      name appears) on the LEFT edge, to the modifier's right edge.
-    //  (b) modifier → its body-call child: similar to a body-call edge —
-    //      anchor at the parent's signature line for the call (using
-    //      call_site_line), on the side facing the child (left or right
-    //      per sideById), to the child's opposite-side edge.
-    //  (c) deeper modifier-subtree edges: same as (b).
+    //  (b) modifier → its body-call subtree (recursively): the child is
+    //      to the LEFT of the parent per Rule 3, so the edge anchors at
+    //      the parent's left edge (per-line if call_site_line is known)
+    //      and arrives at the child's right edge. No side branching —
+    //      v0.6's left/right anchor selection collapsed into a single
+    //      leftward path when modifier subtree descendants became
+    //      structurally "left".
     visibleIds.forEach((id) => {
       if (!inManualLayout(id)) return;
       const pid = parentIdOf(id);
@@ -1168,42 +1006,22 @@
       const parentNode = nodesById.get(pid);
       const parentDom = domById.get(pid);
 
-      let from, to;
-      if (modifierIds.has(id)) {
-        // (a) Parent → modifier. Parent end at signature line containing
-        // the modifier name; modifier end at modifier's right edge.
-        let parentY = parentRect.top + dy + parentRect.h / 2;
-        if (parentNode.node_type === "function" && childNode.call_site_line != null) {
-          const baseLine = parentNode.source_location.lines[0];
-          const rel = childNode.call_site_line - baseLine;
-          const off = lineOffsetInParent(parentDom, rel);
-          if (off) parentY = parentRect.top + dy + off.y;
-        }
-        from = { x: parentRect.left + dx, y: parentY };
-        to = { x: childRect.left + dx + childRect.w, y: childRect.top + dy + childRect.h / 2 };
-      } else {
-        // (b)/(c) Modifier-subtree descendant. Side-driven anchor on the
-        // parent (left or right edge), per-line if call_site_line is known,
-        // pointing to the child's opposite edge.
-        const childSide = sideById.get(id) || "left";
-        const parentAnchorX = childSide === "left"
-          ? parentRect.left + dx
-          : parentRect.left + dx + parentRect.w;
-        let parentY = parentRect.top + dy + parentRect.h / 2;
-        if (parentNode && parentNode.node_type === "function" && childNode.call_site_line != null) {
-          const baseLine = parentNode.source_location.lines[0];
-          const rel = childNode.call_site_line - baseLine;
-          const off = lineOffsetInParent(parentDom, rel);
-          if (off) parentY = parentRect.top + dy + off.y;
-        }
-        from = { x: parentAnchorX, y: parentY };
-        to = {
-          x: childSide === "left"
-            ? childRect.left + dx + childRect.w
-            : childRect.left + dx,
-          y: childRect.top + dy + childRect.h / 2,
-        };
+      let parentY = parentRect.top + dy + parentRect.h / 2;
+      if (parentNode && parentNode.node_type === "function" && childNode.call_site_line != null) {
+        const baseLine = parentNode.source_location.lines[0];
+        const rel = childNode.call_site_line - baseLine;
+        const off = lineOffsetInParent(parentDom, rel);
+        if (off) parentY = parentRect.top + dy + off.y;
       }
+      // (a) and (b) collapse to the same geometry: parent's left edge
+      // (per-line anchored when known) → child's right edge. The modifier
+      // sits to the left of its parent; the modifier's own body-call
+      // descendants sit further left of the modifier — same direction.
+      const from = { x: parentRect.left + dx, y: parentY };
+      const to = {
+        x: childRect.left + dx + childRect.w,
+        y: childRect.top + dy + childRect.h / 2,
+      };
       const mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
 
       const path = document.createElementNS(SVG_NS, "path");
