@@ -668,34 +668,49 @@
     dagre.layout(g);
 
     // v0.9.1 (spec §10.3): within-rank source-line ordering, grouped by
-    // parent. dagre's barycenter optimization overrides the source-line
-    // order Layer 2 establishes at the data-model boundary (v0.6.1's
-    // children.sort by call_site_line in builder._process_calls). The
-    // symptom: when a parent has several body callees at the same rank
-    // whose call sites span non-contiguous source lines, dagre may place a
-    // late-source-line callee above earlier ones, and the edge from the
-    // earlier line then crosses the edges to its in-between siblings.
-    // Concrete case: Morpho _accrueInterest's rank-2 children (borrowRate
-    // line 487, wTaylorCompounded 488, wMulDown 488, toUint128 489+) —
-    // dagre placed toUint128 above borrowRate, crossing wTaylorCompounded
-    // and wMulDown.
+    // parent, with cascading inter-group order. dagre's barycenter
+    // optimization overrides the source-line order Layer 2 establishes at
+    // the data-model boundary (v0.6.1's children.sort by call_site_line in
+    // builder._process_calls). The symptom: when a parent has several body
+    // callees at the same rank whose call sites span non-contiguous source
+    // lines, dagre may place a late-source-line callee above earlier ones,
+    // and the edge from the earlier line then crosses the edges to its
+    // in-between siblings. Concrete case: Morpho _accrueInterest's rank-2
+    // children (borrowRate line 487, wTaylorCompounded 488, wMulDown 488,
+    // toUint128 489+) — dagre placed toUint128 above borrowRate, crossing
+    // wTaylorCompounded and wMulDown.
     //
-    // Fix: for each rank, group nodes by tree parent; within each group,
-    // re-sequence by call_site_line ascending (stable; null-line nodes
-    // keep relative order). Stack within each group's existing vertical
-    // envelope (preserves overall layout extent — only the order changes).
+    // Fix has two dimensions:
+    //
+    //   (a) INTRA-GROUP order — within each parent's children at a rank,
+    //   re-sequence by call_site_line ascending (stable; null-line
+    //   entries sort after).
+    //
+    //   (b) INTER-GROUP order — when a rank holds children of multiple
+    //   parents, order the groups by their parent's finalized Y from the
+    //   previous rank. Otherwise the rank-2 reorder repositions parents
+    //   but the rank-3 children stay in dagre's pre-reorder envelopes,
+    //   inverting groups against their new parents. Stage 1b cascades the
+    //   ordering top-down: depth N's parent Y is settled BEFORE depth N+1
+    //   is reordered, so each rank's groups stack monotonically against
+    //   their parent column.
+    //
     // CRITICAL: groups are NEVER interleaved across parents. A flat source-
     // line sort across a multi-parent rank trades same-rank crossings for
     // new cross-parent crossings; per-parent grouping is the correct rule
     // (spec §10.3).
     //
-    // Parent-group ORDER (when a rank has multiple parents) is inherited
-    // from dagre's natural Y placement: each parent group occupies its own
-    // current envelope and we re-sequence within that envelope, so the
-    // group's Y range remains where dagre put it relative to other groups.
-    // Under normal LR layout, dagre places each parent group adjacent to
-    // its parent's Y, so the parent-Y ordering of groups falls out for
-    // free. We don't move children across groups.
+    // Stacking strategy: groups stack one after another in parent-Y order
+    // starting from the rank's topmost current Y, source-ordered within
+    // each group. Groups do NOT need to be centered on their parents —
+    // monotonic group order is sufficient for crossing removal, and
+    // parent-centering would force overlaps when parents sit close to
+    // each other.
+    //
+    // Top-down processing: bucket dagre nodes by tree depth, process
+    // depths shallow-to-deep, so each parent's Y is finalized before its
+    // children are reordered. Within a depth level, sub-bucket by dagre x
+    // (LR rankdir = one rank per x).
     //
     // Edge polylines were routed by dagre using pre-reorder positions; we
     // translate each polyline uniformly by the tree-child's reorder delta
@@ -711,59 +726,112 @@
     g.nodes().forEach((id) => reorderDelta.set(id, 0));
     (function reorderRanksBySourceLine() {
       const NODESEP = g.graph().nodesep || 30;
-      // Bucket dagre nodes by rank (same x in LR layout).
-      const byRank = new Map();
+      // Build tree-depth map for every dagre node. Root (and any defensive
+      // missing-parent case) gets depth 0; everything else accumulates
+      // 1 + parent's depth via lexical-prefix parentIdOf.
+      const depthById = new Map();
+      function depth(id) {
+        if (depthById.has(id)) return depthById.get(id);
+        const pid = parentIdOf(id);
+        if (pid === null || !g.hasNode(pid)) {
+          depthById.set(id, 0);
+          return 0;
+        }
+        const d = 1 + depth(pid);
+        depthById.set(id, d);
+        return d;
+      }
+      g.nodes().forEach((id) => depth(id));
+      // Bucket by depth so we can process shallow-to-deep (each rank's
+      // parent-Y values are then finalized before children are reordered).
+      const byDepth = new Map();
       g.nodes().forEach((id) => {
-        const x = g.node(id).x;
-        const arr = byRank.get(x) || [];
+        const d = depthById.get(id);
+        const arr = byDepth.get(d) || [];
         arr.push(id);
-        byRank.set(x, arr);
+        byDepth.set(d, arr);
       });
-      byRank.forEach((rankNodes) => {
-        if (rankNodes.length < 2) return;
-        // Group by tree parent (via the lexical id prefix of parentIdOf).
-        const byParent = new Map();
-        rankNodes.forEach((id) => {
-          const pid = parentIdOf(id);
-          const arr = byParent.get(pid) || [];
+      const sortedDepths = [...byDepth.keys()].sort((a, b) => a - b);
+      for (const d of sortedDepths) {
+        if (d === 0) continue; // root: no parent to inherit Y from
+        const nodes = byDepth.get(d);
+        // Sub-bucket by rank (same x in LR layout — each side has its own
+        // rank per depth, since left children sit at x < parent and right
+        // children at x > parent).
+        const byRank = new Map();
+        nodes.forEach((id) => {
+          const x = g.node(id).x;
+          const arr = byRank.get(x) || [];
           arr.push(id);
-          byParent.set(pid, arr);
+          byRank.set(x, arr);
         });
-        // For each parent group, sort children by call_site_line ascending
-        // (stable). Null call_site_line entries keep relative order
-        // (mirrors the Layer 2 stable-sort tie-break: null sorts after).
-        byParent.forEach((kids) => {
-          if (kids.length < 2) return;
-          kids.sort((a, b) => {
-            const la = nodesById.get(a).call_site_line;
-            const lb = nodesById.get(b).call_site_line;
-            if (la == null && lb == null) return 0;
-            if (la == null) return 1;
-            if (lb == null) return -1;
-            return la - lb;
+        byRank.forEach((rankNodes) => {
+          if (rankNodes.length < 2) return;
+          // Group by tree parent (via the lexical id prefix of parentIdOf).
+          const byParent = new Map();
+          rankNodes.forEach((id) => {
+            const pid = parentIdOf(id);
+            const arr = byParent.get(pid) || [];
+            arr.push(id);
+            byParent.set(pid, arr);
           });
-          // Restack within the group's existing vertical envelope: take
-          // the topmost current top, then stack children downward in the
-          // new order separated by NODESEP. Preserves the group's vertical
-          // span (dagre's nodesep + heights) while changing only the
-          // order. No cross-group interleaving.
+          // (a) INTRA-GROUP: sort children of each parent by call_site_line
+          // ascending (stable). Null call_site_line entries keep relative
+          // order (mirrors Layer 2 stable-sort tie-break: null sorts after).
+          byParent.forEach((kids) => {
+            if (kids.length < 2) return;
+            kids.sort((a, b) => {
+              const la = nodesById.get(a).call_site_line;
+              const lb = nodesById.get(b).call_site_line;
+              if (la == null && lb == null) return 0;
+              if (la == null) return 1;
+              if (lb == null) return -1;
+              return la - lb;
+            });
+          });
+          // (b) INTER-GROUP: order parent groups by parent's finalized Y
+          // from the previous rank. Parents missing from dagre (defensive
+          // — should not happen for body-call ranks) sort last. Stable
+          // tie-break on lexical pid keeps deterministic order when two
+          // parents share Y (rare; barycenter usually disambiguates).
+          const parentIds = [...byParent.keys()];
+          parentIds.sort((p1, p2) => {
+            const n1 = g.node(p1);
+            const n2 = g.node(p2);
+            const y1 = n1 ? n1.y : Infinity;
+            const y2 = n2 ? n2.y : Infinity;
+            if (y1 !== y2) return y1 - y2;
+            return p1 < p2 ? -1 : p1 > p2 ? 1 : 0;
+          });
+          // Stack: take the rank's topmost current Y, then walk groups in
+          // parent-Y order, emitting each group's children in source-line
+          // order separated by NODESEP. Groups stack one after another
+          // (no gap between groups beyond NODESEP — they share the rank's
+          // vertical envelope but are monotonically ordered against their
+          // parents). Preserves the rank's top; the rank's bottom may
+          // grow modestly if grouping eliminates dagre-introduced gaps,
+          // but in practice the rank consumed roughly the same vertical
+          // space as the pre-reorder layout.
           let topY = Infinity;
-          kids.forEach((id) => {
+          rankNodes.forEach((id) => {
             const n = g.node(id);
             const t = n.y - n.height / 2;
             if (t < topY) topY = t;
           });
           let cursor = topY;
-          kids.forEach((id) => {
-            const n = g.node(id);
-            const oldY = n.y;
-            const newY = cursor + n.height / 2;
-            n.y = newY;
-            reorderDelta.set(id, newY - oldY);
-            cursor = cursor + n.height + NODESEP;
+          parentIds.forEach((pid) => {
+            const kids = byParent.get(pid);
+            kids.forEach((id) => {
+              const n = g.node(id);
+              const oldY = n.y;
+              const newY = cursor + n.height / 2;
+              n.y = newY;
+              reorderDelta.set(id, newY - oldY);
+              cursor = cursor + n.height + NODESEP;
+            });
           });
         });
-      });
+      }
       // Translate edge polylines by the tree-child's reorder delta so the
       // child end of each polyline lands at the child's new Y.
       g.edges().forEach((e) => {
