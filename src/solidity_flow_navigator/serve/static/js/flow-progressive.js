@@ -667,6 +667,118 @@
 
     dagre.layout(g);
 
+    // v0.9.1 (spec §10.3): within-rank source-line ordering, grouped by
+    // parent. dagre's barycenter optimization overrides the source-line
+    // order Layer 2 establishes at the data-model boundary (v0.6.1's
+    // children.sort by call_site_line in builder._process_calls). The
+    // symptom: when a parent has several body callees at the same rank
+    // whose call sites span non-contiguous source lines, dagre may place a
+    // late-source-line callee above earlier ones, and the edge from the
+    // earlier line then crosses the edges to its in-between siblings.
+    // Concrete case: Morpho _accrueInterest's rank-2 children (borrowRate
+    // line 487, wTaylorCompounded 488, wMulDown 488, toUint128 489+) —
+    // dagre placed toUint128 above borrowRate, crossing wTaylorCompounded
+    // and wMulDown.
+    //
+    // Fix: for each rank, group nodes by tree parent; within each group,
+    // re-sequence by call_site_line ascending (stable; null-line nodes
+    // keep relative order). Stack within each group's existing vertical
+    // envelope (preserves overall layout extent — only the order changes).
+    // CRITICAL: groups are NEVER interleaved across parents. A flat source-
+    // line sort across a multi-parent rank trades same-rank crossings for
+    // new cross-parent crossings; per-parent grouping is the correct rule
+    // (spec §10.3).
+    //
+    // Parent-group ORDER (when a rank has multiple parents) is inherited
+    // from dagre's natural Y placement: each parent group occupies its own
+    // current envelope and we re-sequence within that envelope, so the
+    // group's Y range remains where dagre put it relative to other groups.
+    // Under normal LR layout, dagre places each parent group adjacent to
+    // its parent's Y, so the parent-Y ordering of groups falls out for
+    // free. We don't move children across groups.
+    //
+    // Edge polylines were routed by dagre using pre-reorder positions; we
+    // translate each polyline uniformly by the tree-child's reorder delta
+    // so the child end of the polyline lands at the child's new Y. The
+    // parent end of the polyline is overridden to the parent's signature
+    // line at render time (pts[0] override), so misalignment at the parent
+    // end is invisible.
+    //
+    // Modifier subtree descendants are NOT in dagre (inManualLayout) — the
+    // manual placement pass below already iterates Layer-2-ordered
+    // children, so modifier subtree ordering is already correct.
+    const reorderDelta = new Map();
+    g.nodes().forEach((id) => reorderDelta.set(id, 0));
+    (function reorderRanksBySourceLine() {
+      const NODESEP = g.graph().nodesep || 30;
+      // Bucket dagre nodes by rank (same x in LR layout).
+      const byRank = new Map();
+      g.nodes().forEach((id) => {
+        const x = g.node(id).x;
+        const arr = byRank.get(x) || [];
+        arr.push(id);
+        byRank.set(x, arr);
+      });
+      byRank.forEach((rankNodes) => {
+        if (rankNodes.length < 2) return;
+        // Group by tree parent (via the lexical id prefix of parentIdOf).
+        const byParent = new Map();
+        rankNodes.forEach((id) => {
+          const pid = parentIdOf(id);
+          const arr = byParent.get(pid) || [];
+          arr.push(id);
+          byParent.set(pid, arr);
+        });
+        // For each parent group, sort children by call_site_line ascending
+        // (stable). Null call_site_line entries keep relative order
+        // (mirrors the Layer 2 stable-sort tie-break: null sorts after).
+        byParent.forEach((kids) => {
+          if (kids.length < 2) return;
+          kids.sort((a, b) => {
+            const la = nodesById.get(a).call_site_line;
+            const lb = nodesById.get(b).call_site_line;
+            if (la == null && lb == null) return 0;
+            if (la == null) return 1;
+            if (lb == null) return -1;
+            return la - lb;
+          });
+          // Restack within the group's existing vertical envelope: take
+          // the topmost current top, then stack children downward in the
+          // new order separated by NODESEP. Preserves the group's vertical
+          // span (dagre's nodesep + heights) while changing only the
+          // order. No cross-group interleaving.
+          let topY = Infinity;
+          kids.forEach((id) => {
+            const n = g.node(id);
+            const t = n.y - n.height / 2;
+            if (t < topY) topY = t;
+          });
+          let cursor = topY;
+          kids.forEach((id) => {
+            const n = g.node(id);
+            const oldY = n.y;
+            const newY = cursor + n.height / 2;
+            n.y = newY;
+            reorderDelta.set(id, newY - oldY);
+            cursor = cursor + n.height + NODESEP;
+          });
+        });
+      });
+      // Translate edge polylines by the tree-child's reorder delta so the
+      // child end of each polyline lands at the child's new Y.
+      g.edges().forEach((e) => {
+        const reversed = !e.w.startsWith(e.v + "/");
+        const treeChildId = reversed ? e.v : e.w;
+        const delta = reorderDelta.get(treeChildId) || 0;
+        if (delta !== 0) {
+          const edge = g.edge(e);
+          edge.points.forEach((p) => {
+            p.y += delta;
+          });
+        }
+      });
+    })();
+
     // Modifier grouping needs to happen BEFORE node-rect construction (and
     // before edge-shift application) so we know each parent's modifier-zone
     // height ahead of computing the v0.5.1 left-side shift below.

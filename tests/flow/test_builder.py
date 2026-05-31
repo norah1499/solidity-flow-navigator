@@ -185,6 +185,85 @@ def test_empty_children_case_for_transferfrom(
 
 
 # ---------------------------------------------------------------------------
+# 3b. Children are ordered by call_site_line at the data-model boundary
+# (v0.6.1 invariant; v0.9.1 JS within-rank reorder depends on it)
+# ---------------------------------------------------------------------------
+
+
+def _csl_key(child: FlowNode) -> float:
+    """Universal call-site-line accessor mirroring builder._child_source_line_key.
+
+    FunctionNode carries the value on ``call_site_line``; UnresolvedNode /
+    ExternalNode carry it on ``call_site.lines[0]``. Missing values map to
+    ``math.inf`` (sort last, preserving stable-sort relative order).
+    """
+    import math
+
+    if isinstance(child, FunctionNode):
+        return child.call_site_line if child.call_site_line is not None else math.inf
+    lines = child.call_site.lines
+    return float(lines[0]) if lines else math.inf
+
+
+def test_children_ordered_by_call_site_line_at_data_model_boundary(
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Every FunctionNode's ``children`` is sorted by ``call_site_line``
+    ascending (stable; entries with no resolvable source line sort after).
+    This is the v0.6.1 invariant established in ``builder._process_calls``
+    via the stable sort with ``_child_source_line_key``. The v0.9.1
+    progressive renderer's within-rank reorder pass relies on this order
+    to drive grouped-by-parent source-line layout.
+    """
+    offenders: list[str] = []
+    for flow in solmate_flows:
+        for node in _walk(flow.root):
+            if not isinstance(node, FunctionNode):
+                continue
+            keys = [_csl_key(c) for c in node.children]
+            if keys != sorted(keys):
+                offenders.append(
+                    f"{node.canonical_name}: call_site_line sequence {keys!r}"
+                )
+    assert not offenders, (
+        f"{len(offenders)} FunctionNode(s) have children not in "
+        f"call_site_line order; first 5: {offenders[:5]}"
+    )
+
+
+def test_children_with_non_monotonic_call_sites_are_resorted(
+    solmate_flows: tuple[Flow, ...],
+) -> None:
+    """Find at least one FunctionNode in the Solmate fixture where adjacent
+    children have *different* call_site_line values (not all identical),
+    so the previous test is meaningfully exercised rather than vacuously
+    true on a fixture with only single-line bodies. This is the test-
+    coverage contract that supports the v0.9.1 layout change: the JS
+    reorder pass only matters when source lines differ across siblings.
+    """
+    import math
+
+    found = False
+    for flow in solmate_flows:
+        for node in _walk(flow.root):
+            if not isinstance(node, FunctionNode):
+                continue
+            lines = {_csl_key(c) for c in node.children}
+            lines.discard(math.inf)
+            if len(lines) >= 2:
+                found = True
+                break
+        if found:
+            break
+    assert found, (
+        "no FunctionNode in Solmate fixture has 2+ children with distinct "
+        "call_site_line — the ordering invariant test is vacuously true; "
+        "the v0.9.1 within-rank reorder cannot be exercised without "
+        "multi-call parents in the fixture"
+    )
+
+
+# ---------------------------------------------------------------------------
 # 4. ExternalNode boundaries (lib/ and free functions)
 # ---------------------------------------------------------------------------
 
