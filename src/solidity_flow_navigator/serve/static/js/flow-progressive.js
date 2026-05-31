@@ -668,19 +668,20 @@
     dagre.layout(g);
 
     // v0.9.1 (spec §10.3): within-rank source-line ordering, grouped by
-    // parent, with cascading inter-group order. dagre's barycenter
-    // optimization overrides the source-line order Layer 2 establishes at
-    // the data-model boundary (v0.6.1's children.sort by call_site_line in
-    // builder._process_calls). The symptom: when a parent has several body
-    // callees at the same rank whose call sites span non-contiguous source
-    // lines, dagre may place a late-source-line callee above earlier ones,
-    // and the edge from the earlier line then crosses the edges to its
-    // in-between siblings. Concrete case: Morpho _accrueInterest's rank-2
-    // children (borrowRate line 487, wTaylorCompounded 488, wMulDown 488,
-    // toUint128 489+) — dagre placed toUint128 above borrowRate, crossing
-    // wTaylorCompounded and wMulDown.
+    // parent, with cascading inter-group order and parent-anchored Y
+    // placement. dagre's barycenter optimization overrides the source-line
+    // order Layer 2 establishes at the data-model boundary (v0.6.1's
+    // children.sort by call_site_line in builder._process_calls). The
+    // symptom: when a parent has several body callees at the same rank
+    // whose call sites span non-contiguous source lines, dagre may place a
+    // late-source-line callee above earlier ones, and the edge from the
+    // earlier line then crosses the edges to its in-between siblings.
+    // Concrete case: Morpho _accrueInterest's rank-2 children (borrowRate
+    // line 487, wTaylorCompounded 488, wMulDown 488, toUint128 489+) —
+    // dagre placed toUint128 above borrowRate, crossing wTaylorCompounded
+    // and wMulDown.
     //
-    // Fix has two dimensions:
+    // Fix has three dimensions:
     //
     //   (a) INTRA-GROUP order — within each parent's children at a rank,
     //   re-sequence by call_site_line ascending (stable; null-line
@@ -688,24 +689,25 @@
     //
     //   (b) INTER-GROUP order — when a rank holds children of multiple
     //   parents, order the groups by their parent's finalized Y from the
-    //   previous rank. Otherwise the rank-2 reorder repositions parents
-    //   but the rank-3 children stay in dagre's pre-reorder envelopes,
-    //   inverting groups against their new parents. Stage 1b cascades the
-    //   ordering top-down: depth N's parent Y is settled BEFORE depth N+1
-    //   is reordered, so each rank's groups stack monotonically against
-    //   their parent column.
+    //   previous rank. Cascade top-down so depth N's parent Y is settled
+    //   BEFORE depth N+1 is reordered. This stops dagre's pre-reorder
+    //   envelopes from inverting against newly-repositioned parents.
+    //
+    //   (c) Y PLACEMENT — anchor each child at its parent's call-site-line
+    //   Y (the same per-line anchor pts[0] uses for edge rendering), then
+    //   run one order-preserving forward separation sweep so adjacent
+    //   children clear each other by NODESEP. Anchoring keeps edges level
+    //   with their call site; the forward sweep guarantees no overlap
+    //   without reordering, so the crossing fix from (a) and (b) is
+    //   preserved. Stage 1b's alternative (pack all groups consecutively
+    //   from the rank's topmost Y) ordered groups correctly but pulled
+    //   late-parent groups to the top of the rank, producing near-
+    //   vertical edges. Anchor-then-separate replaces top-packing.
     //
     // CRITICAL: groups are NEVER interleaved across parents. A flat source-
     // line sort across a multi-parent rank trades same-rank crossings for
     // new cross-parent crossings; per-parent grouping is the correct rule
     // (spec §10.3).
-    //
-    // Stacking strategy: groups stack one after another in parent-Y order
-    // starting from the rank's topmost current Y, source-ordered within
-    // each group. Groups do NOT need to be centered on their parents —
-    // monotonic group order is sufficient for crossing removal, and
-    // parent-centering would force overlaps when parents sit close to
-    // each other.
     //
     // Top-down processing: bucket dagre nodes by tree depth, process
     // depths shallow-to-deep, so each parent's Y is finalized before its
@@ -803,32 +805,68 @@
             if (y1 !== y2) return y1 - y2;
             return p1 < p2 ? -1 : p1 > p2 ? 1 : 0;
           });
-          // Stack: take the rank's topmost current Y, then walk groups in
-          // parent-Y order, emitting each group's children in source-line
-          // order separated by NODESEP. Groups stack one after another
-          // (no gap between groups beyond NODESEP — they share the rank's
-          // vertical envelope but are monotonically ordered against their
-          // parents). Preserves the rank's top; the rank's bottom may
-          // grow modestly if grouping eliminates dagre-introduced gaps,
-          // but in practice the rank consumed roughly the same vertical
-          // space as the pre-reorder layout.
-          let topY = Infinity;
-          rankNodes.forEach((id) => {
-            const n = g.node(id);
-            const t = n.y - n.height / 2;
-            if (t < topY) topY = t;
-          });
-          let cursor = topY;
+          // (c) Y PLACEMENT — anchor-then-separate.
+          //
+          // For each child in the new order, compute an ideal Y center
+          // from the parent's call-site-line anchor (the same per-line
+          // offset pts[0] uses for edge rendering). Falls back to
+          // parent center Y when call_site_line is missing or the line
+          // span can't be found in the parent DOM.
+          //
+          // Then run one forward separation sweep top-to-bottom: child's
+          // top = max(ideal_top, prev_bottom + NODESEP). Never reorder
+          // during separation — the (a)/(b) crossing fix depends on
+          // monotonic order. The first child sits exactly at its ideal;
+          // each subsequent child sits at its ideal OR pushed down only
+          // as far as needed to clear the previous child by NODESEP.
+          //
+          // Effect: edges leave their parent's call-site line and arrive
+          // at children that sit roughly level with that line, so a
+          // rank's bottom child no longer floats at the top of the rank
+          // (Stage 1b's top-packing artifact). Late-source-line children
+          // may be pushed slightly below their ideal when prior siblings'
+          // anchors crowded together, but they remain ordered.
+          const ordered = [];
           parentIds.forEach((pid) => {
-            const kids = byParent.get(pid);
-            kids.forEach((id) => {
-              const n = g.node(id);
-              const oldY = n.y;
-              const newY = cursor + n.height / 2;
-              n.y = newY;
-              reorderDelta.set(id, newY - oldY);
-              cursor = cursor + n.height + NODESEP;
-            });
+            ordered.push(...byParent.get(pid));
+          });
+          let prevBottom = -Infinity;
+          ordered.forEach((id) => {
+            const n = g.node(id);
+            const pid = parentIdOf(id);
+            const pDagre = g.node(pid);
+            // Ideal center Y: parent's call-site-line anchor for this
+            // child, else parent center.
+            let idealCenter = pDagre ? pDagre.y : n.y;
+            if (pDagre) {
+              const childNode = nodesById.get(id);
+              const parentNode = nodesById.get(pid);
+              if (
+                parentNode &&
+                parentNode.node_type === "function" &&
+                parentNode.source_location &&
+                childNode.call_site_line != null
+              ) {
+                const baseLine = parentNode.source_location.lines[0];
+                const rel = childNode.call_site_line - baseLine;
+                const pDom = domById.get(pid);
+                if (pDom) {
+                  const off = lineOffsetInParent(pDom, rel);
+                  if (off) {
+                    idealCenter = pDagre.y - pDagre.height / 2 + off.y;
+                  }
+                }
+              }
+            }
+            let top = idealCenter - n.height / 2;
+            if (prevBottom + NODESEP > top) {
+              top = prevBottom + NODESEP;
+            }
+            const newY = top + n.height / 2;
+            const oldY = n.y;
+            n.y = newY;
+            reorderDelta.set(id, newY - oldY);
+            prevBottom = top + n.height;
           });
         });
       }
