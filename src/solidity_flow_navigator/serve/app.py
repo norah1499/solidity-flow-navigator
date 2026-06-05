@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import socket
 import urllib.parse
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -235,16 +234,10 @@ def create_app(
     facts: RepoFacts,
     flows: tuple[Flow, ...],
     *,
-    legacy: bool = False,
     expand_all: bool = False,
     scope: Scope | None = None,
 ) -> Flask:
     """Build the Flask application.
-
-    ``legacy=True`` switches the per-Flow page to load the all-at-once
-    renderer (``flow.js``) instead of the progressive renderer
-    (``flow-progressive.js``). The flag is set from the CLI's ``--legacy``
-    switch (spec §10.2). Default is the progressive renderer.
 
     ``expand_all=True`` causes every per-Flow page to render with its full
     call tree expanded at page load — the progressive renderer's initial
@@ -253,7 +246,9 @@ def create_app(
     ``--expand-all`` switch and is session-wide: every Flow page reflects
     it. The index page is unaffected. This is not a separate renderer:
     per-line edge anchoring, the §10.3 direction model, and all v0.9
-    reorder / anchor passes apply identically.
+    reorder / anchor passes apply identically. v0.10.0 Stage 2 removed
+    the ``legacy`` parameter and the all-at-once renderer it switched to;
+    ``--expand-all`` is now the only path to the bird's-eye view.
 
     ``scope`` is the active ``Scope`` whose raw glob strings drive the
     v0.8.0 index scope summary line (spec §8.3). It is optional — tests
@@ -286,7 +281,6 @@ def create_app(
     def _inject_globals() -> dict[str, Any]:
         return {
             "repo_path": facts.repo_path,
-            "legacy_renderer": legacy,
             "expand_all": expand_all,
         }
 
@@ -347,19 +341,11 @@ def _safe_json(obj: Any) -> str:
 # ---------------------------------------------------------------------------
 # Server runner
 # ---------------------------------------------------------------------------
-
-
-def _check_port_available(host: str, port: int) -> None:
-    """Raise OSError if the host:port pair is not bindable.
-
-    A pre-bind is racy by definition (someone could grab the port between
-    here and ``app.run``), but for a single-user local tool it converts
-    the common case (port already taken by a stale solflow) into a clean
-    error message instead of a Werkzeug traceback.
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((host, port))
+#
+# The pre-bind probe (``_check_port_available``) moved to ``cli._bind_probe``
+# as of v0.10.0 Stage 2, alongside the new ``_select_port`` auto-select loop.
+# This module is now responsible only for constructing the Flask app and
+# running it once the port has been chosen.
 
 
 def run_server(app: Flask, host: str, port: int) -> None:

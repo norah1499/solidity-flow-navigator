@@ -1,24 +1,46 @@
 """Tests for the CLI layer.
 
-The bulk of this file exercises ``_resolve_scope`` — Stage 3's bug-prone
-piece per the v0.1 sprint prompt. Tests construct ``argparse.Namespace``
-objects directly rather than invoking the CLI: this lets us pin every
-precedence path in §11.2's resolution order without spinning up Slither,
-Flask, or argparse itself. The real ``main()`` calls
-``_resolve_scope(args, Path.cwd())`` so the function is one composition
-away from production.
+The first block exercises ``_resolve_scope`` — Stage 3's bug-prone piece
+per the v0.1 sprint prompt. Tests construct ``argparse.Namespace`` objects
+directly rather than invoking the CLI: this lets us pin every precedence
+path in §11.2's resolution order without spinning up Slither, Flask, or
+argparse itself. The real ``main()`` calls ``_resolve_scope(args,
+Path.cwd())`` so the function is one composition away from production.
 
 CWD is passed as an explicit parameter (not read from ``os.getcwd()``) so
 each test points it at its own ``tmp_path``, avoiding any monkey-patching
 of process state.
+
+The second block exercises ``--expand-all`` parsing (v0.10.0 Stage 1).
+
+The third block exercises ``--port`` selection (v0.10.0 Stage 2): the
+default-lookup auto-select walks upward from 8080 when the default is
+busy; an explicit ``--port N`` that's already in use is a hard error
+with no silent reassignment.
+
+v0.10.0 Stage 2 removed ``--legacy``, ``--json``, ``--host``, and
+``--no-default-excludes`` from the CLI. Their dedicated tests are gone;
+the ``[]``-clears-default capability that ``--no-default-excludes`` used
+to overlap with is still covered via the config-file path
+(``test_resolve_file_explicit_empty_clears_one_key`` and friends).
 """
 
+from __future__ import annotations
+
 import argparse
+import socket
 from pathlib import Path
 
 import pytest
 
-from solidity_flow_navigator.cli import _build_parser, _resolve_scope
+from solidity_flow_navigator.cli import (
+    DEFAULT_PORT,
+    SERVER_HOST,
+    _bind_probe,
+    _build_parser,
+    _resolve_scope,
+    _select_port,
+)
 from solidity_flow_navigator.flow.config import ConfigError
 from solidity_flow_navigator.flow.scope import DEFAULT_SCOPE, Scope
 
@@ -30,14 +52,13 @@ def _args(
     exclude_contract: list[str] | None = None,
     inline_library: list[str] | None = None,
     stub_path: list[str] | None = None,
-    no_default_excludes: bool = False,
-    legacy: bool = False,
 ) -> argparse.Namespace:
     """Build an argparse.Namespace mirroring what ``main()``'s parser produces.
 
-    All flag fields are filled so the Namespace matches what argparse
-    produces in ``main()``, even though ``_resolve_scope`` only reads
-    the scope-related subset.
+    Only the scope-related subset is filled in — ``_resolve_scope`` reads
+    nothing else. The Namespace shape matches what argparse produces in
+    ``main()`` after v0.10.0 Stage 2 (no ``legacy`` / ``no_default_excludes``
+    / ``host`` / ``json`` fields).
     """
 
     return argparse.Namespace(
@@ -46,8 +67,6 @@ def _args(
         exclude_contract=exclude_contract,
         inline_library=inline_library,
         stub_path=stub_path,
-        no_default_excludes=no_default_excludes,
-        legacy=legacy,
     )
 
 
@@ -67,26 +86,6 @@ def test_resolve_defaults_only(tmp_path: Path) -> None:
 
     result = _resolve_scope(_args(), tmp_path)
     assert result == DEFAULT_SCOPE
-
-
-# ---------------------------------------------------------------------------
-# --no-default-excludes
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_no_default_excludes_clears_two_keys(tmp_path: Path) -> None:
-    """--no-default-excludes clears exclude_paths + exclude_contracts; the
-    inline_libraries and stub_paths defaults (both empty tuples already)
-    are untouched."""
-
-    result = _resolve_scope(_args(no_default_excludes=True), tmp_path)
-    assert result.exclude_paths == ()
-    assert result.exclude_contracts == ()
-    # Verify the flag did NOT touch inline_libraries / stub_paths (no
-    # defaults to clear, so behavior is identical, but the equality check
-    # pins the intent).
-    assert result.inline_libraries == DEFAULT_SCOPE.inline_libraries
-    assert result.stub_paths == DEFAULT_SCOPE.stub_paths
 
 
 # ---------------------------------------------------------------------------
@@ -112,7 +111,11 @@ def test_resolve_file_only_replaces_defaults(tmp_path: Path) -> None:
 
 def test_resolve_file_explicit_empty_clears_one_key(tmp_path: Path) -> None:
     """An empty list in the file clears that key explicitly per §11.2; other
-    keys keep their default values (since they were absent from the file)."""
+    keys keep their default values (since they were absent from the file).
+
+    Since v0.10.0 Stage 2 removed ``--no-default-excludes``, this
+    config-file ``[]`` path is the only way to drop a built-in default.
+    """
 
     _write_toml(tmp_path, "[scope]\nexclude_paths = []\n")
     result = _resolve_scope(_args(), tmp_path)
@@ -160,43 +163,6 @@ def test_resolve_cli_only_appends_onto_defaults(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# --no-default-excludes + CLI / + file interactions
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_no_defaults_plus_cli_yields_only_cli_values(
-    tmp_path: Path,
-) -> None:
-    """--no-default-excludes clears first, then CLI appends → result is
-    exactly the CLI values (defaults are gone)."""
-
-    result = _resolve_scope(
-        _args(
-            no_default_excludes=True,
-            exclude_path=["only/this/**"],
-            exclude_contract=["OnlyThis*"],
-        ),
-        tmp_path,
-    )
-    assert result.exclude_paths == ("only/this/**",)
-    assert result.exclude_contracts == ("OnlyThis*",)
-
-
-def test_resolve_no_defaults_plus_file(tmp_path: Path) -> None:
-    """With --no-default-excludes, file values still apply on top of the
-    cleared base. Absent file keys yield ``()`` (the cleared base survives)."""
-
-    _write_toml(
-        tmp_path,
-        '[scope]\nexclude_paths = ["from/file/**"]\n',
-    )
-    result = _resolve_scope(_args(no_default_excludes=True), tmp_path)
-    assert result.exclude_paths == ("from/file/**",)
-    # exclude_contracts was cleared and the file didn't define it.
-    assert result.exclude_contracts == ()
-
-
-# ---------------------------------------------------------------------------
 # File + CLI append
 # ---------------------------------------------------------------------------
 
@@ -214,51 +180,6 @@ def test_resolve_file_then_cli_appends_onto_file_value(tmp_path: Path) -> None:
         tmp_path,
     )
     assert result.exclude_paths == ("from/file/**", "from/cli/**")
-
-
-# ---------------------------------------------------------------------------
-# All three layers
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_no_defaults_plus_file_plus_cli(tmp_path: Path) -> None:
-    """--no-default-excludes clears, file replaces (or doesn't), CLI appends.
-    Verify the full chain on a single key."""
-
-    _write_toml(
-        tmp_path,
-        '[scope]\nexclude_paths = ["from/file/**"]\n',
-    )
-    result = _resolve_scope(
-        _args(
-            no_default_excludes=True,
-            exclude_path=["from/cli/**"],
-        ),
-        tmp_path,
-    )
-    # Clear → file replaces empty base → CLI appends.
-    assert result.exclude_paths == ("from/file/**", "from/cli/**")
-
-
-# ---------------------------------------------------------------------------
-# --no-default-excludes does NOT clear inline_libraries
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_no_defaults_does_not_clear_inline_libraries(
-    tmp_path: Path,
-) -> None:
-    """Per spec §11.2: --no-default-excludes affects only exclude_paths and
-    exclude_contracts. inline_libraries has no default to clear — and the
-    CLI must not retroactively zero it out via the same flag."""
-
-    result = _resolve_scope(
-        _args(no_default_excludes=True, inline_library=["forge-std"]),
-        tmp_path,
-    )
-    # DEFAULT_SCOPE.inline_libraries is () already, so the only signal that
-    # the flag didn't misbehave is that the CLI append still appears.
-    assert result.inline_libraries == ("forge-std",)
 
 
 # ---------------------------------------------------------------------------
@@ -360,20 +281,6 @@ def test_resolve_stub_path_file_then_cli_appends(tmp_path: Path) -> None:
     assert result.stub_paths == ("from/file/**", "from/cli/**")
 
 
-def test_resolve_no_default_excludes_does_not_clear_stub_paths(
-    tmp_path: Path,
-) -> None:
-    """Per spec §11.2: ``--no-default-excludes`` only touches exclude_paths
-    and exclude_contracts. ``stub_paths`` (like ``inline_libraries``) has no
-    default to clear — and a CLI append must still survive the flag."""
-
-    result = _resolve_scope(
-        _args(no_default_excludes=True, stub_path=["src/libraries/**"]),
-        tmp_path,
-    )
-    assert result.stub_paths == ("src/libraries/**",)
-
-
 def test_resolve_stub_path_file_empty_clears(tmp_path: Path) -> None:
     """An explicit empty list clears (becomes ``()``); CLI appends onto that."""
 
@@ -399,7 +306,7 @@ def test_resolve_returns_scope_instance(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# --expand-all (v0.10.0)
+# --expand-all (v0.10.0 Stage 1)
 # ---------------------------------------------------------------------------
 
 
@@ -419,3 +326,148 @@ def test_expand_all_flag_parses_true() -> None:
     parser = _build_parser()
     args = parser.parse_args(["--expand-all", "some/repo"])
     assert args.expand_all is True
+
+
+# ---------------------------------------------------------------------------
+# v0.10.0 Stage 2 removals — pin that the dead flags are gone
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "--legacy",
+        "--json",
+        "--host",
+        "--no-default-excludes",
+    ],
+)
+def test_removed_flags_no_longer_parse(flag: str) -> None:
+    """v0.10.0 Stage 2 retired four flags. Pin that they error out so a
+    future refactor that re-adds one without spec backing trips the test.
+    argparse exits the process via ``SystemExit`` on an unknown flag.
+    """
+    parser = _build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args([flag, "some/repo"])
+
+
+# ---------------------------------------------------------------------------
+# --port: default auto-select + explicit semantics (v0.10.0 Stage 2)
+# ---------------------------------------------------------------------------
+
+
+def _bind_holder(port: int) -> socket.socket:
+    """Bind a real socket to ``(127.0.0.1, port)`` and return it.
+
+    Used to occupy a port for the duration of a test. The caller must
+    close the socket in a ``try/finally`` so the port is released even if
+    the assertion fails.
+
+    ``SO_REUSEADDR`` is intentionally NOT set here — we want a TRUE bind
+    so the cli's ``SO_REUSEADDR``-decorated probe still fails. (Two
+    sockets both with ``SO_REUSEADDR`` on the same host:port WILL both
+    bind on macOS / Linux, which would silently false-pass the test.)
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind((SERVER_HOST, port))
+    sock.listen(1)
+    return sock
+
+
+def _find_free_port_above(start: int) -> int:
+    """Return a port we can bind right now, starting from ``start``.
+
+    Used by tests that need to know an unused port without racing the
+    cli's own auto-select. We probe and immediately release; tests rely
+    on no other process grabbing the port between this call and the
+    next bind, which is realistic on a CI machine running one test at a
+    time.
+    """
+    for p in range(start, start + 64):
+        try:
+            _bind_probe(p)
+        except OSError:
+            continue
+        return p
+    raise RuntimeError(f"no free port in [{start}, {start + 64})")
+
+
+def test_select_port_default_returns_8080_when_free() -> None:
+    """No --port flag, 8080 free → return 8080. The auto-select probe
+    walks upward starting from DEFAULT_PORT; the first candidate is
+    DEFAULT_PORT itself.
+    """
+    # Pre-flight: skip cleanly if our test environment doesn't actually
+    # have 8080 free (some CI runners hold it). The test's subject is the
+    # function's behavior, not the environment, so a skip on an occupied
+    # 8080 is honest.
+    try:
+        _bind_probe(DEFAULT_PORT)
+    except OSError:
+        pytest.skip(f"port {DEFAULT_PORT} is occupied in the test environment")
+    chosen = _select_port(None)
+    assert chosen == DEFAULT_PORT
+
+
+def test_select_port_default_skips_occupied_8080(capsys) -> None:
+    """No --port flag, 8080 occupied → auto-select picks the next free
+    port above 8080. The chosen port satisfies the bind probe; no error
+    is printed to stderr because auto-select treats EADDRINUSE as a
+    "keep walking" signal, not a hard failure.
+    """
+    holder = _bind_holder(DEFAULT_PORT)
+    try:
+        chosen = _select_port(None)
+    finally:
+        holder.close()
+    assert chosen is not None
+    assert chosen > DEFAULT_PORT
+    assert chosen < DEFAULT_PORT + 64  # within the probe window
+    err = capsys.readouterr().err
+    assert err == "", (
+        "auto-select must not print to stderr on a successful walk; " f"got: {err!r}"
+    )
+
+
+def test_select_port_explicit_busy_is_hard_error(capsys) -> None:
+    """``--port N`` explicit + N occupied → return None and print a clear
+    error. solflow MUST NOT silently reassign to N+1 (that would defeat
+    the point of asking for a specific port).
+    """
+    busy = _find_free_port_above(DEFAULT_PORT + 100)
+    holder = _bind_holder(busy)
+    try:
+        result = _select_port(busy)
+    finally:
+        holder.close()
+    assert result is None
+    err = capsys.readouterr().err
+    assert f"--port {busy}" in err
+    assert "already in use" in err
+
+
+def test_select_port_explicit_free_returns_that_port() -> None:
+    """``--port N`` explicit + N free → return N. No probing happens."""
+    free = _find_free_port_above(DEFAULT_PORT + 100)
+    assert _select_port(free) == free
+
+
+def test_port_flag_default_is_none() -> None:
+    """Omitting ``--port`` produces ``args.port is None`` so ``_select_port``
+    knows to invoke the auto-select probe. An int default would short-
+    circuit the probe and re-introduce the "explicit-busy crashes" bug.
+    """
+    parser = _build_parser()
+    args = parser.parse_args(["some/repo"])
+    assert args.port is None
+
+
+def test_port_flag_parses_int() -> None:
+    """``--port 9090`` produces an int Namespace value (argparse type=int).
+    The value flows through ``_serve(port=args.port)`` straight into
+    ``_select_port``'s explicit-port branch.
+    """
+    parser = _build_parser()
+    args = parser.parse_args(["--port", "9090", "some/repo"])
+    assert args.port == 9090

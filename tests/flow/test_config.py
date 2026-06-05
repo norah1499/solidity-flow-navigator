@@ -352,8 +352,10 @@ def test_apply_partial_does_not_mutate_base() -> None:
 
 
 def test_apply_partial_over_empty_base() -> None:
-    """Applying onto an empty Scope (e.g. post-``--no-default-excludes``)
-    yields exactly the partial's populated values."""
+    """Applying onto an empty Scope (e.g. one where the config file's
+    ``exclude_paths = []`` has cleared the built-in defaults — the
+    v0.10.0 Stage 2 replacement for ``--no-default-excludes``) yields
+    exactly the partial's populated values."""
 
     base = Scope()
     partial = PartialScope(

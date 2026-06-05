@@ -77,8 +77,10 @@ def solmate_flows_unfiltered(solmate_facts: RepoFacts) -> tuple[Flow, ...]:
     Used by tests whose subject is content the default scope excludes —
     Mock contracts (``MockERC20``, ``MockOwned``, ...), helpers under
     ``src/test/**``, and the lib/ts-test reach that test contracts produce.
-    Equivalent to running ``solflow --no-default-excludes`` with no config
-    file.
+    Equivalent to running ``solflow`` with a ``solflow.toml`` whose
+    ``exclude_paths = []`` and ``exclude_contracts = []`` clear the
+    built-in defaults (the v0.10.0 Stage 2 replacement for the retired
+    ``--no-default-excludes`` flag).
     """
 
     return build_flows(solmate_facts, Scope())

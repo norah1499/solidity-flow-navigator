@@ -58,15 +58,23 @@ Python 3.11+ required (uses `tomllib` from stdlib). `pipx` is the intended distr
 .venv/bin/solflow path/to/your/foundry/repo
 ```
 
-Starts a local Flask server on `http://localhost:8080` (always bound to `127.0.0.1` — never exposed externally). Open the URL in your browser. The index page lists every detected entry point, grouped by contract and split into mutating vs. read-only sections. Click an entry point to see its Flow.
+Starts a local Flask server on `http://127.0.0.1:8080` (always bound to `127.0.0.1` — never exposed externally). If port 8080 is taken, solflow probes upward for the first free port and prints the chosen URL. Open it in your browser. The index page lists every detected entry point, grouped by contract and split into mutating vs. read-only sections. Click an entry point to see its Flow.
 
-For non-default ports:
+For a specific port:
 
 ```bash
 .venv/bin/solflow path/to/repo --port 8081
 ```
 
-The all-at-once (legacy) renderer is opt-in via `--legacy` — useful when you want to scan the full Flow tree at a glance instead of expanding on click. The progressive renderer is recommended for anything larger than a couple of dozen nodes.
+An explicit `--port N` that is already in use is a hard error — solflow will not silently reassign off a value you asked for.
+
+For the bird's-eye view of a whole call tree at a glance — useful for orientation on a new codebase or for small flows where the full visual mass is informative rather than overwhelming — pass `--expand-all`:
+
+```bash
+.venv/bin/solflow path/to/repo --expand-all
+```
+
+`--expand-all` is the progressive renderer with its initial state set to "everything expanded" — per-line edge anchoring, modifier placement, and the left/right direction model all apply identically; only the initial expansion state differs. (This replaces the pre-v0.10 `--legacy` all-at-once renderer.)
 
 **Keyboard shortcuts on a Flow page:** `0` or `r` resets zoom and pan to fit-to-frame.
 
@@ -94,7 +102,15 @@ Or via CLI flags (each repeatable, append to the resolved value):
   --inline-library "forge-std"
 ```
 
-`--no-default-excludes` clears the built-in path and contract excludes if you want full-codebase visibility (useful for auditing test setups themselves). `--config <path>` points at an alternate TOML config file when `solflow.toml` lives outside the working directory.
+To clear the built-in path or contract excludes for full-codebase visibility (useful for auditing test setups themselves), set the matching key to an empty list in `solflow.toml`:
+
+```toml
+[scope]
+exclude_paths     = []   # clears **/test/**, **/tests/**, **/*.t.sol, **/mocks/**
+exclude_contracts = []   # clears *Mock*
+```
+
+`--config <path>` points at an alternate TOML config file when `solflow.toml` lives outside the working directory.
 
 See §11.2 of [`solidity-flow-navigator.md`](solidity-flow-navigator.md) for the full configuration semantics and resolution order.
 

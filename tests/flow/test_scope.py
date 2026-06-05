@@ -54,8 +54,10 @@ def test_default_scope_matches_spec_11_2() -> None:
 
 
 def test_empty_scope_constructs() -> None:
-    """An empty Scope (no defaults) must construct — needed by
-    ``--no-default-excludes`` and by tests that want to exercise raw matching."""
+    """An empty Scope (no defaults) must construct — needed by the
+    config-file ``[]``-clears-default path (the v0.10.0 Stage 2
+    replacement for ``--no-default-excludes``) and by tests that want
+    to exercise raw matching."""
 
     s = Scope()
     assert s.exclude_paths == ()
@@ -120,8 +122,10 @@ def test_path_excluded_default_does_not_match_production() -> None:
 
 
 def test_path_excluded_empty_scope_excludes_nothing() -> None:
-    """An empty exclude_paths tuple matches no filename — used by
-    ``--no-default-excludes`` to bring excluded files back."""
+    """An empty exclude_paths tuple matches no filename — used by the
+    config-file ``exclude_paths = []`` rule (the v0.10.0 Stage 2
+    replacement for ``--no-default-excludes``) to bring excluded files
+    back."""
 
     empty = Scope()
     assert path_excluded(empty, "src/test/Vault.t.sol") is False

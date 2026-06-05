@@ -50,11 +50,8 @@
 {% block scripts %}
   <script src="{{ url_for('static', filename='vendor/dagre.min.js') }}"></script>
   <script src="{{ url_for('static', filename='vendor/d3.min.js') }}"></script>
-  {# Renderer choice: progressive expansion is the default; `solflow --legacy`
-     switches to the all-at-once renderer (flow.js). See spec §10.2. #}
-  {% if legacy_renderer %}
-    <script src="{{ url_for('static', filename='js/flow.js') }}"></script>
-  {% else %}
-    <script src="{{ url_for('static', filename='js/flow-progressive.js') }}"></script>
-  {% endif %}
+  {# v0.10.0 Stage 2: the all-at-once renderer (flow.js) and the
+     `--legacy` flag that selected it are retired. The bird's-eye-view
+     use case is now `--expand-all` on this same renderer (spec §10.2). #}
+  <script src="{{ url_for('static', filename='js/flow-progressive.js') }}"></script>
 {% endblock %}

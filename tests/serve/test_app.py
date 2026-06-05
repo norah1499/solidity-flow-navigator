@@ -10,8 +10,9 @@ cover the v0 success-criteria checks the spec calls out:
   * Static assets (main.css, generated pygments.css, vendored dagre and d3)
     all return 200.
 
-We don't try to run flow.js in a headless browser here — that's covered
-by the manual §15.4 walk-through in the Stage 4 commit message.
+We don't try to run flow-progressive.js in a headless browser here — the
+Stage 1b / 1c Playwright probes under ``docs/probes/`` cover the
+rendering behavior we'd otherwise want to assert on JS-rendered geometry.
 """
 
 from __future__ import annotations
@@ -44,25 +45,12 @@ def client_unfiltered(
 
     Used by tests whose subject is content the default scope filters out
     (Mock contracts, the Tests group's existence, ``src/test/**`` flows).
-    Equivalent to running ``solflow --no-default-excludes`` against the
-    test fixture.
+    Equivalent to running ``solflow`` against a config that clears the
+    built-in path and contract excludes (``exclude_paths = []`` and
+    ``exclude_contracts = []`` in ``solflow.toml``) — the v0.10.0
+    Stage 2 replacement for the retired ``--no-default-excludes`` flag.
     """
     app = create_app(solmate_facts, solmate_flows_unfiltered)
-    app.config.update(TESTING=True)
-    return app.test_client()
-
-
-@pytest.fixture(scope="module")
-def client_legacy(
-    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...]
-) -> FlaskClient:
-    """Variant of ``client`` built with ``legacy=True``.
-
-    Equivalent to running ``solflow --legacy``: the per-Flow page loads
-    the all-at-once renderer (``flow.js``) instead of the progressive
-    renderer (``flow-progressive.js``). See spec §10.2.
-    """
-    app = create_app(solmate_facts, solmate_flows, legacy=True)
     app.config.update(TESTING=True)
     return app.test_client()
 
@@ -655,35 +643,12 @@ def test_flow_page_known_url_id(
     # Vendored libs and frontend script tags.
     assert "/static/vendor/dagre.min.js" in body
     assert "/static/vendor/d3.min.js" in body
-    # v0.5 default: the progressive renderer loads instead of flow.js.
-    # The legacy renderer is opt-in via solflow --legacy (covered in
-    # test_flow_page_legacy_loads_flow_js below).
+    # v0.10.0 Stage 2: the progressive renderer is the only renderer.
+    # ``--legacy`` and ``flow.js`` are gone; both the script tag and the
+    # static-file path are pinned absent.
     assert "/static/js/flow-progressive.js" in body
-    assert "/static/js/flow.js" not in body
+    assert "flow.js" not in body
     # Graph container the JS targets.
-    assert 'id="graph-frame"' in body
-
-
-def test_flow_page_legacy_loads_flow_js(
-    client_legacy: FlaskClient, solmate_flows: tuple[Flow, ...]
-) -> None:
-    """``solflow --legacy`` swaps the renderer script tag to flow.js.
-
-    The page still embeds the same flow JSON and references the same
-    vendored libs — only the renderer choice differs.
-    """
-    target = next(
-        f
-        for f in solmate_flows
-        if f.entry_point_invoker_canonical_name == "ERC4626.deposit(uint256,address)"
-    )
-    rv = client_legacy.get(f"/flow/{target.entry_point_invoker_canonical_name}")
-    assert rv.status_code == 200
-    body = rv.get_data(as_text=True)
-    assert "/static/js/flow.js" in body
-    assert "/static/js/flow-progressive.js" not in body
-    # Sanity: the rest of the page chrome still renders.
-    assert '<script type="application/json" id="flow-data"' in body
     assert 'id="graph-frame"' in body
 
 
@@ -707,9 +672,9 @@ def test_flow_page_default_carries_expand_all_false(
     body = rv.get_data(as_text=True)
     assert 'data-expand-all="false"' in body
     assert 'data-expand-all="true"' not in body
-    # Still the progressive renderer — expand_all does not swap renderers.
+    # Progressive renderer is the only renderer post-v0.10.0 Stage 2.
     assert "/static/js/flow-progressive.js" in body
-    assert "/static/js/flow.js" not in body
+    assert "flow.js" not in body
 
 
 def test_flow_page_expand_all_propagates_to_data_attribute(
@@ -733,10 +698,10 @@ def test_flow_page_expand_all_propagates_to_data_attribute(
     body = rv.get_data(as_text=True)
     assert 'data-expand-all="true"' in body
     assert 'data-expand-all="false"' not in body
-    # --expand-all does not flip the renderer choice; the progressive
-    # renderer still loads.
+    # Progressive renderer is the only renderer post-v0.10.0 Stage 2;
+    # ``--expand-all`` is a flag on it, not a renderer swap.
     assert "/static/js/flow-progressive.js" in body
-    assert "/static/js/flow.js" not in body
+    assert "flow.js" not in body
     # Same flow-data script structure as without the flag.
     assert '<script type="application/json" id="flow-data"' in body
 
@@ -847,7 +812,6 @@ def test_flow_page_unknown_returns_404(client: FlaskClient) -> None:
         "/static/css/pygments.css",
         "/static/vendor/dagre.min.js",
         "/static/vendor/d3.min.js",
-        "/static/js/flow.js",
         "/static/js/flow-progressive.js",
     ],
 )
@@ -855,6 +819,15 @@ def test_static_assets_served(client: FlaskClient, path: str) -> None:
     rv = client.get(path)
     assert rv.status_code == 200, f"{path} did not return 200"
     assert int(rv.headers.get("Content-Length", "0")) > 0
+
+
+def test_legacy_flow_js_is_no_longer_served(client: FlaskClient) -> None:
+    """v0.10.0 Stage 2 deleted ``flow.js`` from the static tree. A request
+    for the old path must 404 — not silently fall through to another
+    file or serve a stale copy.
+    """
+    rv = client.get("/static/js/flow.js")
+    assert rv.status_code == 404
 
 
 def test_pygments_css_contains_token_classes(client: FlaskClient) -> None:

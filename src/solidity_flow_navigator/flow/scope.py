@@ -18,10 +18,11 @@ fields. v0.1 introduced three rule sets; v0.2 adds a fourth:
   load-bearing for the Flow at hand.
 
 ``DEFAULT_SCOPE`` carries the hard-coded defaults from §11.2 so first-run
-output on real codebases is usable without configuration ceremony (P3).
-``--no-default-excludes`` (in the CLI) clears ``exclude_paths`` and
-``exclude_contracts`` before file/CLI values apply; ``inline_libraries`` and
-``stub_paths`` have no defaults to clear.
+output on real codebases is usable without configuration ceremony (P3). To
+drop a default key, set it to an empty list in ``solflow.toml`` (the
+config-file ``[]``-clears-default rule, §11.2). The previous CLI shortcut
+``--no-default-excludes`` was retired in v0.10.0 Stage 2; the
+config-file path is now the only way to clear a built-in default.
 
 Glob matching uses `pathspec` with gitignore syntax (the ``gitwildmatch``
 factory was deprecated in pathspec 1.x in favor of ``gitignore``). Compiled
