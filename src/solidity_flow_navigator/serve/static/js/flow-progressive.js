@@ -1321,12 +1321,30 @@
 
   // ----- fit-to-frame + d3-zoom ------------------------------------------
 
+  // v0.10.0 Stage 1b: the standard interactive zoom-out floor of 0.05 is
+  // fine for interactively-built flows where layoutBox stays within a few
+  // viewport multiples, but --expand-all on a large tree (Uniswap V4
+  // PoolManager.swap → ~9645 × 133771 px layout) needs a tighter fit
+  // scale than 0.05 to bring the whole tree into view. We compute the
+  // required fit floor lazily per layout and widen scaleExtent's lower
+  // bound only when needed. The upper bound (4×) is unchanged. Interactive
+  // zoom remains clamped to scaleExtent, so on normal flows the floor
+  // stays at 0.05.
+  const ZOOM_MIN_DEFAULT = 0.05;
+  const ZOOM_MAX = 4;
+
   function fitTransform() {
     const fr = frame.getBoundingClientRect();
     const padding = 16;
     const sx = (fr.width - padding * 2) / layoutBox.width;
     const sy = (fr.height - padding * 2) / layoutBox.height;
-    const scale = Math.min(1, Math.min(sx, sy));
+    const fitScale = Math.min(sx, sy);
+    // Lower the zoom floor whenever the required fit dips below the
+    // default floor. Without this, fitScale ≈ 0.0065 on swap gets clamped
+    // back up to 0.05 by scaleExtent, leaving every node off-screen.
+    const newMin = Math.min(ZOOM_MIN_DEFAULT, fitScale);
+    zoom.scaleExtent([newMin, ZOOM_MAX]);
+    const scale = Math.min(1, fitScale);
     const tx = (fr.width - layoutBox.width * scale) / 2;
     const ty = padding;
     return d3.zoomIdentity.translate(tx, ty).scale(scale);
@@ -1334,7 +1352,7 @@
 
   const zoom = d3
     .zoom()
-    .scaleExtent([0.05, 4])
+    .scaleExtent([ZOOM_MIN_DEFAULT, ZOOM_MAX])
     .on("zoom", (event) => {
       const t = event.transform;
       graph.style.transform = "translate(" + t.x + "px, " + t.y + "px) scale(" + t.k + ")";

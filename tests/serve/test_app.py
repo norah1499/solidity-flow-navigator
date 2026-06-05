@@ -865,3 +865,118 @@ def test_pygments_css_contains_token_classes(client: FlaskClient) -> None:
     assert ".src" in body
     # A couple of token classes we know Pygments emits for Solidity output.
     assert ".k" in body or ".kt" in body
+
+
+# -- v0.10.0 Stage 1b: flow-page sizing pins --------------------------------
+# These tests pin the CSS rules that prevent --expand-all on a large tree from
+# inflating the flex chain (body → .site-main → #graph-frame) to match the
+# rendered #graph's intrinsic dimensions. The Stage 1b probe
+# (docs/probes/v0_10_0_stage1b_expand_all_probe.py) showed that without these
+# rules, Uniswap V4 PoolManager.swap rendered #graph-frame at 9645 × 133773
+# (matching the graph) instead of viewport-fit dimensions, leaving every node
+# placed off-screen and producing the "graph flashes once and vanishes"
+# symptom. pytest cannot assert browser-rendered geometry, but it can pin the
+# CSS string so a future refactor that drops these rules trips the test rather
+# than silently regressing.
+
+
+_FLOW_PAGE_BODY_BLOCK_RE = re.compile(
+    r"body\.flow-page\s*\{[^}]*\}",
+    re.DOTALL,
+)
+_FLOW_PAGE_SITE_MAIN_BLOCK_RE = re.compile(
+    r"body\.flow-page\s+\.site-main\s*\{[^}]*\}",
+    re.DOTALL,
+)
+_GRAPH_FRAME_BLOCK_RE = re.compile(
+    r"#graph-frame\s*\{[^}]*\}",
+    re.DOTALL,
+)
+
+
+def _block_from(css: str, regex: re.Pattern[str], label: str) -> str:
+    match = regex.search(css)
+    assert match is not None, f"did not find {label} rule in main.css"
+    return match.group(0)
+
+
+def test_flow_page_body_caps_to_viewport(client: FlaskClient) -> None:
+    """``body.flow-page`` must be ``height: 100vh`` and ``overflow: hidden``.
+
+    Without this, --expand-all on a large tree lets the body grow to the
+    full rendered-graph height (~133k px on v4-core swap), which lets the
+    frame inflate vertically and breaks ``fitTransform``. v0.10.0 Stage 1b.
+    """
+    rv = client.get("/static/css/main.css")
+    css = rv.get_data(as_text=True)
+    block = _block_from(css, _FLOW_PAGE_BODY_BLOCK_RE, "body.flow-page")
+    assert "height: 100vh" in block, (
+        "body.flow-page must set height: 100vh so the page locks to the "
+        "viewport. Without it, --expand-all on huge trees blows up the "
+        "vertical layout (see v0.10.0 Stage 1b commit)."
+    )
+    assert "overflow: hidden" in block, (
+        "body.flow-page must set overflow: hidden so content overflows are "
+        "clipped instead of expanding the body (see v0.10.0 Stage 1b commit)."
+    )
+
+
+def test_flow_page_site_main_caps_to_viewport_width(client: FlaskClient) -> None:
+    """``body.flow-page .site-main`` must set ``width: 100%`` and
+    ``min-width: 0``.
+
+    Without ``width: 100%``, ``align-items: stretch`` on the body flex
+    container doesn't override the item's content-based width and
+    .site-main grows to match #graph's intrinsic dimensions. Without
+    ``min-width: 0``, the flex automatic-minimum-size rule keeps the item
+    at min-content. Both are needed. v0.10.0 Stage 1b.
+    """
+    rv = client.get("/static/css/main.css")
+    css = rv.get_data(as_text=True)
+    block = _block_from(css, _FLOW_PAGE_SITE_MAIN_BLOCK_RE, "body.flow-page .site-main")
+    assert "width: 100%" in block, (
+        "body.flow-page .site-main must set width: 100% so it tracks the "
+        "body width instead of its min-content (see v0.10.0 Stage 1b commit)."
+    )
+    assert "min-width: 0" in block, (
+        "body.flow-page .site-main must set min-width: 0 to escape the "
+        "flex automatic-minimum-size rule (see v0.10.0 Stage 1b commit)."
+    )
+
+
+def test_graph_frame_caps_to_viewport_width(client: FlaskClient) -> None:
+    """``#graph-frame`` must set ``min-width: 0`` to escape the same flex
+    automatic-minimum-size trap (mirrors the .site-main pin above)."""
+    rv = client.get("/static/css/main.css")
+    css = rv.get_data(as_text=True)
+    block = _block_from(css, _GRAPH_FRAME_BLOCK_RE, "#graph-frame")
+    assert "min-width: 0" in block, (
+        "#graph-frame must set min-width: 0 — without it, the frame "
+        "inflates to #graph's intrinsic width on huge layouts and "
+        "fitTransform() can never scale to fit (see v0.10.0 Stage 1b)."
+    )
+
+
+def test_flow_progressive_fit_lowers_scale_extent_for_huge_layouts(
+    client: FlaskClient,
+) -> None:
+    """The progressive renderer's ``fitTransform`` must lower the d3-zoom
+    floor when the required fit scale dips below the default 0.05.
+
+    Without this, even after the CSS pins above bring the frame back to
+    viewport dimensions, the computed fit scale (~0.0065 on v4-core
+    PoolManager.swap) is clamped back up to 0.05 and nodes at style.top
+    67k+ remain off-screen. v0.10.0 Stage 1b.
+    """
+    rv = client.get("/static/js/flow-progressive.js")
+    js = rv.get_data(as_text=True)
+    # Pin both the new constant and the lazy zoom.scaleExtent update inside
+    # fitTransform — either alone is insufficient.
+    assert "ZOOM_MIN_DEFAULT" in js, (
+        "flow-progressive.js must define a ZOOM_MIN_DEFAULT constant so the "
+        "v0.10.0 Stage 1b dynamic-floor adjustment can reference it."
+    )
+    assert "zoom.scaleExtent(" in js, (
+        "fitTransform must call zoom.scaleExtent(...) to widen the lower "
+        "bound when the required fit dips below the default floor."
+    )

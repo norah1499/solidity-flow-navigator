@@ -375,13 +375,37 @@ code, pre { font-family: var(--font-mono); }
 body.flow-page {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  /* v0.10.0 Stage 1b: cap the flow page to the viewport. Previously only
+     min-height: 100vh, which let the body grow to match its content
+     height. Combined with the flex children's missing min-width: 0
+     (below), --expand-all on a large tree (Uniswap V4 PoolManager.swap
+     →  ~9645 × 133771 px graph) made the CSS flex automatic-minimum-size
+     rule propagate #graph's intrinsic dimensions up through #graph-frame
+     → .site-main, inflating the FRAME to match the graph. fitTransform()
+     then measured a 9645-wide frame against the 9645-wide layout and
+     computed scale ≈ 1, leaving every node placed off-screen far below
+     the visible viewport (the graph "flashed once and vanished"). With
+     height: 100vh + overflow: hidden, body is now locked to viewport, so
+     #graph-frame fills its proper share and fitTransform() sees real
+     viewport dimensions. */
+  height: 100vh;
+  overflow: hidden;
 }
 body.flow-page .site-main {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* v0.10.0 Stage 1b: pair to body.flow-page above. align-items defaults
+     to `stretch` on a flex container, but stretch only takes effect when
+     the cross-axis size is `auto` AND there is no content forcing the
+     item wider. With `width: auto`, a flex item with wide content
+     (#graph-frame → #graph at ~9645 px on Uniswap V4 PoolManager.swap)
+     resolves to its content size and overrides the stretch. Explicit
+     `width: 100%` + `min-width: 0` forces .site-main to track the body
+     width (1600 viewport-derived) instead of its min-content. */
+  width: 100%;
+  min-width: 0;
   max-width: none;
   padding: 0;
 }
@@ -395,6 +419,11 @@ body.flow-page .flow-header {
   width: 100%;
   flex: 1 1 auto;
   min-height: 0;
+  /* v0.10.0 Stage 1b: pair to body.flow-page above. Same flex
+     automatic-minimum-size escape hatch — without min-width: 0, the
+     frame inflates to #graph's intrinsic width on large layouts and
+     fitTransform() can never scale to fit. */
+  min-width: 0;
   overflow: hidden;
   background: var(--bg-page);
   border-top: 0.5px solid var(--border-soft);
