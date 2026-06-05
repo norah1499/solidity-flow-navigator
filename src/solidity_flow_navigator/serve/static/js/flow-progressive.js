@@ -976,6 +976,27 @@
       modZoneByParent.set(pid, total);
     });
 
+    // v0.9.2: topmost left-side direct child top per parent, in dagre
+    // (post-reorder) coordinates. Drives the group-delta modifier shift
+    // below, so multiple left-side children of one parent clear the
+    // modifier zone by a single shared delta instead of each clamping to
+    // the zone bottom (which collapsed them). Keyed by immediate parent via
+    // parentIdOf. Modifier-subtree descendants (inManualLayout) are
+    // excluded since they are not dagre nodes.
+    const leftGroupTopByParent = new Map(); // pid -> min dagre top among left-side direct children
+    visibleIds.forEach((id) => {
+      if (id === flow.root.__id) return;
+      if (inManualLayout(id)) return;
+      if (sideById.get(id) !== "left") return;
+      const pid = parentIdOf(id);
+      if (!pid) return;
+      const cd = g.node(id);
+      if (!cd) return;
+      const top = cd.y - cd.height / 2;
+      const cur = leftGroupTopByParent.get(pid);
+      if (cur === undefined || top < cur) leftGroupTopByParent.set(pid, top);
+    });
+
     const shiftById = new Map();
     function computeShifts(id) {
       let nodeShift;
@@ -989,11 +1010,24 @@
         let extra = 0;
         if (side === "left" && parentZone > 0) {
           const parentDagre = g.node(pid);
-          const childDagre = g.node(id);
-          if (parentDagre && childDagre) {
+          if (parentDagre) {
             const parentTop = parentDagre.y - parentDagre.height / 2;
-            const childTop = childDagre.y - childDagre.height / 2;
-            extra = Math.max(0, parentTop + parentZone + MODIFIER_GAP_Y - childTop);
+            // v0.9.2: clear the zone using the TOPMOST left-side sibling's
+            // top, not this child's own top, so every left child of `pid`
+            // gets the same delta. The per-node childTop form (v0.5.2)
+            // mapped every left child above the zone bottom to the same
+            // absolute Y (parentTop + zone + GAP), which collapsed 2+ left
+            // siblings onto each other after the reorder pass had separated
+            // them (PoolManager.swap: toId + _getPool both left under a
+            // two-modifier zone). A uniform group delta clears the zone for
+            // the topmost sibling and preserves the reorder separation for
+            // the rest. Reduces to the old formula when there is one left
+            // child (groupTop equals childTop), so single-child cases
+            // (Sablier createWithDurationsLT) are unchanged.
+            const groupTop = leftGroupTopByParent.get(pid);
+            if (groupTop !== undefined) {
+              extra = Math.max(0, parentTop + parentZone + MODIFIER_GAP_Y - groupTop);
+            }
           }
         }
         nodeShift = parentShift + extra;
