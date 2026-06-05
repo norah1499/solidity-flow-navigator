@@ -4,13 +4,16 @@ A navigation tool for Web3 security auditors. Takes a Solidity repository, produ
 
 *Long-form name: Solidity Flow Navigator. CLI command: `solflow`.*
 
-<!-- TODO post-sprint: regenerate screenshot from a live v0.6.1
-     run showing short-form titles, bidirectional layout, and
-     modifier upper-left placement. Caption may need refresh.
-     Candidate flows: Aave V3 Pool.borrow, Sablier
-     createWithDurationsLT, or Morpho borrow — pick whichever
-     shows at least one modifier and several expanded children
-     in a single frame. -->
+<!-- TODO post-sprint: regenerate screenshot from a live run showing
+     short-form titles, left/right placement, and modifier upper-left
+     placement. Caption may need refresh. Candidate flows: Aave V3
+     Pool.borrow, Sablier createWithDurationsLT, or Morpho borrow —
+     pick whichever shows at least one modifier and several expanded
+     children in a single frame. The new `--expand-all` bird's-eye
+     view on a larger codebase (e.g. Uniswap V4 PoolManager.swap) is
+     also a candidate shot now that it shows the full call tree
+     laid out with the left/right direction model. -->
+
 ![A Flow rendered for SablierLockup.createWithTimestamps, showing modifier, internal helpers, and external library calls](docs/flow-example.png)
 
 *Sablier V2 Core — `SablierLockup.createWithTimestamps`. Cream nodes are in-scope functions with syntax-highlighted source, the blue badge is an inline modifier, and gray dashed nodes are external library calls (ERC721, SafeERC20, PRB-math). Free-function targets render with a muted `[no contract]` suffix.*
@@ -25,7 +28,7 @@ For each `external`/`public` function (plus `receive` and `fallback`) on each co
 - Folds modifiers inline into the function's call tree.
 - Surfaces calls into external dependencies (`lib/`, `node_modules/`, or any user-configured stub path) as terminal stubs.
 - Marks unresolvable dispatch (interface calls without binding, low-level `.call()`, dynamic Yul, abstract functions with no implementation in the chain) as explicit **unresolved** nodes — never silently omits, never guesses.
-- Renders the result as HTML+SVG with pan, zoom, syntax-highlighted source, and keyboard shortcuts. The default renderer is progressive — each Flow opens with just the entry point and its modifiers visible and grows on click — and lays out bidirectionally around the root, with modifiers stacked upper-left, body-call children auto-balanced left/right under a no-crossings constraint, short-form node titles (`Contract.method(...)`), and the full canonical signature available on hover.
+- Renders the result as HTML+SVG with pan, zoom, syntax-highlighted source, and keyboard shortcuts. Each Flow opens with just the entry point and its modifiers visible and grows on click, with modifiers stacked upper-left, first-level body callees auto-balanced left/right of the root, deeper expansions inheriting their first-level side so chained calls read in a single direction, and short-form node titles (`Contract.method(...)`) with the full canonical signature on hover. Pass `--expand-all` to open every Flow page with its full call tree already expanded — useful for orientation on a new codebase or for small flows where the full visual mass is informative; the layout and crossing-reduction passes are identical, only the initial expansion state differs.
 
 ## Why
 
@@ -126,7 +129,7 @@ The source of truth is [`solidity-flow-navigator.md`](solidity-flow-navigator.md
 
 ## Status
 
-**v0.6.1.** Pre-1.0 — interfaces and defaults may change. v0 success criteria are met (see §15 of the spec); v0.x is calibration and correctness work driven by real-codebase testing. Codebases the tool has been run against so far: Solmate, Aave V3, Morpho Blue, Sablier V2 Core.
+**v0.10.0.** Pre-1.0 — interfaces and defaults may change. v0 success criteria are met (see §15 of the spec); v0.x is calibration and correctness work driven by real-codebase testing. Codebases the tool has been run against so far: Solmate, Aave V3, Morpho Blue, Sablier V2 Core, Uniswap V4 Core.
 
 ## License
 

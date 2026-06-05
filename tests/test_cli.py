@@ -471,3 +471,24 @@ def test_port_flag_parses_int() -> None:
     parser = _build_parser()
     args = parser.parse_args(["--port", "9090", "some/repo"])
     assert args.port == 9090
+
+
+# ---------------------------------------------------------------------------
+# --help grouping (v0.10.0 Stage 3, cosmetic)
+# ---------------------------------------------------------------------------
+
+
+def test_help_uses_four_argument_groups() -> None:
+    """v0.10.0 Stage 3 regroups ``--help`` into four argparse argument
+    groups by concern: Scope, Resolution, Rendering, Server. The labels
+    are the source of truth; a tighter assertion on the rendered shape
+    would over-fix to argparse's specific layout (and break on argparse
+    upgrades). This loose pin trips only if a group title is dropped or
+    renamed without an accompanying spec / HANDOFF update.
+    """
+    help_text = _build_parser().format_help()
+    for label in ("Scope:", "Resolution:", "Rendering:", "Server:"):
+        assert label in help_text, (
+            f"--help is missing the {label!r} argument group "
+            "(v0.10.0 Stage 3 regrouping)."
+        )

@@ -86,6 +86,19 @@ def _build_parser() -> argparse.ArgumentParser:
     Extracted so tests can exercise flag parsing directly without going
     through the rest of ``main()`` (compilation, fact extraction, server
     bind). The shape mirrors what ``main()`` would build inline.
+
+    Flags are organised into four argument groups so ``--help`` reads by
+    concern rather than as a flat list (v0.10.0 Stage 3 cosmetic). The
+    groups are cosmetic only — argparse parses the same Namespace shape
+    regardless of grouping, so the groupings don't propagate to test
+    fixtures or production code.
+
+    - **Scope**: which contracts produce Flows (path/contract excludes,
+      config file).
+    - **Resolution**: how unresolved call targets get treated (library
+      inlining vs in-tree stubbing).
+    - **Rendering**: how Flow pages render in the browser.
+    - **Server**: how the local server binds.
     """
     parser = argparse.ArgumentParser(
         prog="solflow",
@@ -99,22 +112,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "repo_path",
         help="Path to the Solidity repository root (crytic-compile target).",
     )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=None,
-        help=(
-            f"Bind the local server to port N. With no flag, solflow binds "
-            f"{DEFAULT_PORT} or the next free port above it (probes up to "
-            f"{PORT_PROBE_LIMIT} ports) and prints the chosen URL. An "
-            f"explicit --port N that is already in use is a hard error "
-            f"— solflow will not silently reassign."
-        ),
+
+    # ------------------------------------------------------------------
+    # Scope: which contracts produce Flows. (spec §11.2)
+    # ------------------------------------------------------------------
+    scope_group = parser.add_argument_group(
+        "Scope",
+        "Which contracts in the repository produce Flows.",
     )
-    # ------------------------------------------------------------------
-    # v0.1 scope-rule flags (spec §11.2)
-    # ------------------------------------------------------------------
-    parser.add_argument(
+    scope_group.add_argument(
         "--config",
         default=None,
         help=(
@@ -124,7 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "exist — a missing file is a hard error."
         ),
     )
-    parser.add_argument(
+    scope_group.add_argument(
         "--exclude-path",
         action="append",
         default=None,
@@ -135,7 +141,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Repeatable: appends to the defaults and any config-file values."
         ),
     )
-    parser.add_argument(
+    scope_group.add_argument(
         "--exclude-contract",
         action="append",
         default=None,
@@ -146,7 +152,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "produce no Flows. Repeatable: appends to defaults and config."
         ),
     )
-    parser.add_argument(
+
+    # ------------------------------------------------------------------
+    # Resolution: how unresolved call targets get treated. (§11.2 / §11.8)
+    # ------------------------------------------------------------------
+    resolution_group = parser.add_argument_group(
+        "Resolution",
+        "How unresolved call targets get treated — recurse into "
+        "selected libraries or terminate at in-tree stubs.",
+    )
+    resolution_group.add_argument(
         "--inline-library",
         action="append",
         default=None,
@@ -157,7 +172,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "empty (everything under lib/ is stubbed). Repeatable."
         ),
     )
-    parser.add_argument(
+    resolution_group.add_argument(
         "--stub-path",
         action="append",
         default=None,
@@ -170,7 +185,15 @@ def _build_parser() -> argparse.ArgumentParser:
             "when both match the same path. Repeatable."
         ),
     )
-    parser.add_argument(
+
+    # ------------------------------------------------------------------
+    # Rendering: how Flow pages render in the browser. (§10.2)
+    # ------------------------------------------------------------------
+    rendering_group = parser.add_argument_group(
+        "Rendering",
+        "How Flow pages render in the browser.",
+    )
+    rendering_group.add_argument(
         "--expand-all",
         action="store_true",
         help=(
@@ -180,6 +203,26 @@ def _build_parser() -> argparse.ArgumentParser:
             "state — per-line edge anchoring, the §10.3 direction model, "
             "and all v0.9 reorder passes apply identically. Default is "
             "root-only with click-to-expand."
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # Server: how the local server binds.
+    # ------------------------------------------------------------------
+    server_group = parser.add_argument_group(
+        "Server",
+        "How the local server binds. The host is always 127.0.0.1.",
+    )
+    server_group.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=(
+            f"Bind the local server to port N. With no flag, solflow binds "
+            f"{DEFAULT_PORT} or the next free port above it (probes up to "
+            f"{PORT_PROBE_LIMIT} ports) and prints the chosen URL. An "
+            f"explicit --port N that is already in use is a hard error "
+            f"— solflow will not silently reassign."
         ),
     )
     return parser
