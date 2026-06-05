@@ -25,8 +25,11 @@
 </header>
 
 {# Stage 3 graph layout. Flow data is embedded inline; flow.js builds the
-   dagre graph, measures rendered HTML nodes, lays out, and binds d3-zoom. #}
-<script type="application/json" id="flow-data">{{ flow_json | safe }}</script>
+   dagre graph, measures rendered HTML nodes, lays out, and binds d3-zoom.
+   The ``data-expand-all`` attribute is the v0.10.0 toggle (spec §10.2): the
+   progressive renderer reads it on init and, when "true", expands every
+   call site recursively before the first layout pass. #}
+<script type="application/json" id="flow-data" data-expand-all="{{ 'true' if expand_all else 'false' }}">{{ flow_json | safe }}</script>
 
 <div id="graph-frame" tabindex="0">
   <div id="graph">

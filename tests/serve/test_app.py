@@ -67,6 +67,23 @@ def client_legacy(
     return app.test_client()
 
 
+@pytest.fixture(scope="module")
+def client_expand_all(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...]
+) -> FlaskClient:
+    """Variant of ``client`` built with ``expand_all=True``.
+
+    Equivalent to running ``solflow --expand-all``: per-Flow pages still
+    use the progressive renderer, but the embedded ``data-expand-all``
+    attribute on ``#flow-data`` flips to ``"true"`` so the renderer
+    expands the full call tree at page load. See spec §10.2 "Full
+    expansion".
+    """
+    app = create_app(solmate_facts, solmate_flows, expand_all=True)
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
 # -- index ------------------------------------------------------------------
 
 
@@ -634,7 +651,7 @@ def test_flow_page_known_url_id(
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
     # The embedded JSON the frontend reads.
-    assert '<script type="application/json" id="flow-data">' in body
+    assert '<script type="application/json" id="flow-data"' in body
     # Vendored libs and frontend script tags.
     assert "/static/vendor/dagre.min.js" in body
     assert "/static/vendor/d3.min.js" in body
@@ -666,8 +683,62 @@ def test_flow_page_legacy_loads_flow_js(
     assert "/static/js/flow.js" in body
     assert "/static/js/flow-progressive.js" not in body
     # Sanity: the rest of the page chrome still renders.
-    assert '<script type="application/json" id="flow-data">' in body
+    assert '<script type="application/json" id="flow-data"' in body
     assert 'id="graph-frame"' in body
+
+
+def test_flow_page_default_carries_expand_all_false(
+    client: FlaskClient, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """The default app (no ``--expand-all``) emits
+    ``data-expand-all="false"`` on the ``#flow-data`` script tag, so the
+    progressive renderer takes the root-only initial-render path.
+
+    Pins the default-path-preserved invariant: v0.10.0 Stage 1 must not
+    change behavior when the flag is off.
+    """
+    target = next(
+        f
+        for f in solmate_flows
+        if f.entry_point_invoker_canonical_name == "ERC4626.deposit(uint256,address)"
+    )
+    rv = client.get(f"/flow/{target.entry_point_invoker_canonical_name}")
+    assert rv.status_code == 200
+    body = rv.get_data(as_text=True)
+    assert 'data-expand-all="false"' in body
+    assert 'data-expand-all="true"' not in body
+    # Still the progressive renderer — expand_all does not swap renderers.
+    assert "/static/js/flow-progressive.js" in body
+    assert "/static/js/flow.js" not in body
+
+
+def test_flow_page_expand_all_propagates_to_data_attribute(
+    client_expand_all: FlaskClient, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """``solflow --expand-all`` propagates to the rendered Flow page as
+    ``data-expand-all="true"`` on the ``#flow-data`` script tag.
+
+    The renderer reads that attribute on init and switches to the
+    full-tree initial expansion. Same progressive renderer, same script
+    tag — only the embedded flag differs. The Flow JSON itself is
+    unchanged.
+    """
+    target = next(
+        f
+        for f in solmate_flows
+        if f.entry_point_invoker_canonical_name == "ERC4626.deposit(uint256,address)"
+    )
+    rv = client_expand_all.get(f"/flow/{target.entry_point_invoker_canonical_name}")
+    assert rv.status_code == 200
+    body = rv.get_data(as_text=True)
+    assert 'data-expand-all="true"' in body
+    assert 'data-expand-all="false"' not in body
+    # --expand-all does not flip the renderer choice; the progressive
+    # renderer still loads.
+    assert "/static/js/flow-progressive.js" in body
+    assert "/static/js/flow.js" not in body
+    # Same flow-data script structure as without the flag.
+    assert '<script type="application/json" id="flow-data"' in body
 
 
 def test_flow_page_inherited_url_does_not_collide(
@@ -710,7 +781,7 @@ def test_flow_page_inherited_url_does_not_collide(
 
 
 _FLOW_DATA_RE = re.compile(
-    r'<script type="application/json" id="flow-data">(.*?)</script>',
+    r'<script type="application/json" id="flow-data"[^>]*>(.*?)</script>',
     re.DOTALL,
 )
 
@@ -746,8 +817,8 @@ def test_flow_page_routes_colliding_canonicals_distinctly(
 
     owned_body = owned_rv.get_data(as_text=True)
     mock_body = mock_rv.get_data(as_text=True)
-    assert '<script type="application/json" id="flow-data">' in owned_body
-    assert '<script type="application/json" id="flow-data">' in mock_body
+    assert '<script type="application/json" id="flow-data"' in owned_body
+    assert '<script type="application/json" id="flow-data"' in mock_body
 
     owned_match = _FLOW_DATA_RE.search(owned_body)
     mock_match = _FLOW_DATA_RE.search(mock_body)

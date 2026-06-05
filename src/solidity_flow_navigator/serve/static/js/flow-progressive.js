@@ -48,6 +48,15 @@
   }
   const flow = JSON.parse(dataEl.textContent);
 
+  // v0.10.0 (spec §10.2 "Full expansion"). When the Flask app was built with
+  // expand_all=True (CLI `--expand-all`), the template emits
+  // data-expand-all="true" on #flow-data and the renderer expands every
+  // call site recursively at init instead of showing only the root.
+  // Per-line edge anchoring, the §10.3 direction model, and the v0.9
+  // reorder/anchor passes all apply identically — this is the same
+  // progressive renderer with a different initial expansion state.
+  const EXPAND_ALL = dataEl.dataset.expandAll === "true";
+
   // ----- DOM handles ------------------------------------------------------
 
   const frame = document.getElementById("graph-frame");
@@ -390,6 +399,23 @@
     if (node.node_type !== "function") return;
     (node.children || []).forEach((c) => {
       if (isModifierNode(c)) expandImplicit(c.__id);
+    });
+  }
+
+  // v0.10.0 (spec §10.2 "Full expansion"). Recursively expand every child of
+  // every function node — equivalent to clicking every expandable call site
+  // in depth-first order, including the modifier auto-expand that
+  // expandImplicit already does on a single function. The visibility set is
+  // populated up front; a single `relayout(null)` pass after this returns
+  // handles all positioning. Terminal nodes (external, unresolved) carry no
+  // children, so recursion stops naturally there.
+  function expandAllRecursive(id) {
+    if (visibleIds.has(id)) return; // idempotent
+    showNode(id);
+    const node = nodesById.get(id);
+    if (node.node_type !== "function") return;
+    (node.children || []).forEach((c) => {
+      expandAllRecursive(c.__id);
     });
   }
 
@@ -1332,7 +1358,14 @@
 
   // ----- initial render ---------------------------------------------------
 
-  expandImplicit(flow.root.__id);
+  // v0.10.0: --expand-all picks the full-tree initial state; the default
+  // remains root + auto-rendered modifiers. Either way, a single relayout
+  // and fit pass runs afterwards — the rest of the renderer is unchanged.
+  if (EXPAND_ALL) {
+    expandAllRecursive(flow.root.__id);
+  } else {
+    expandImplicit(flow.root.__id);
+  }
   let layoutBox = relayout(null);
   applyFit(false);
 

@@ -236,6 +236,7 @@ def create_app(
     flows: tuple[Flow, ...],
     *,
     legacy: bool = False,
+    expand_all: bool = False,
     scope: Scope | None = None,
 ) -> Flask:
     """Build the Flask application.
@@ -244,6 +245,15 @@ def create_app(
     renderer (``flow.js``) instead of the progressive renderer
     (``flow-progressive.js``). The flag is set from the CLI's ``--legacy``
     switch (spec §10.2). Default is the progressive renderer.
+
+    ``expand_all=True`` causes every per-Flow page to render with its full
+    call tree expanded at page load — the progressive renderer's initial
+    expansion state is set to "everything" instead of root-only (spec
+    §10.2 "Full expansion"). The flag is set from the CLI's
+    ``--expand-all`` switch and is session-wide: every Flow page reflects
+    it. The index page is unaffected. This is not a separate renderer:
+    per-line edge anchoring, the §10.3 direction model, and all v0.9
+    reorder / anchor passes apply identically.
 
     ``scope`` is the active ``Scope`` whose raw glob strings drive the
     v0.8.0 index scope summary line (spec §8.3). It is optional — tests
@@ -274,7 +284,11 @@ def create_app(
     # Common context for every rendered template.
     @app.context_processor
     def _inject_globals() -> dict[str, Any]:
-        return {"repo_path": facts.repo_path, "legacy_renderer": legacy}
+        return {
+            "repo_path": facts.repo_path,
+            "legacy_renderer": legacy,
+            "expand_all": expand_all,
+        }
 
     # solflow is a localhost dev tool; an auditor swapping a JS/CSS file mid-
     # session (or rerunning the CLI after a code change) must see the new

@@ -59,7 +59,13 @@ DEFAULT_PORT = 8080
 DEFAULT_CONFIG_FILENAME = "solflow.toml"
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _build_parser() -> argparse.ArgumentParser:
+    """Construct the argparse parser for ``solflow``.
+
+    Extracted so tests can exercise flag parsing directly without going
+    through the rest of ``main()`` (compilation, fact extraction, server
+    bind). The shape mirrors what ``main()`` would build inline.
+    """
     parser = argparse.ArgumentParser(
         prog="solflow",
         description=(
@@ -167,6 +173,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             "default). The progressive renderer is the default."
         ),
     )
+    parser.add_argument(
+        "--expand-all",
+        action="store_true",
+        help=(
+            "Render every Flow page with its full call tree expanded at "
+            "page load (equivalent to clicking every expandable call site). "
+            "Same progressive renderer, just a different initial expansion "
+            "state — per-line edge anchoring, the §10.3 direction model, "
+            "and all v0.9 reorder passes apply identically. Default is "
+            "root-only with click-to-expand."
+        ),
+    )
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = _build_parser()
     args = parser.parse_args(argv)
 
     # Resolve the Scope BEFORE compilation: a broken config shouldn't make
@@ -205,7 +228,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write("\n")
         return 0
 
-    return _serve(facts, flows, args.host, args.port, legacy=args.legacy, scope=scope)
+    return _serve(
+        facts,
+        flows,
+        args.host,
+        args.port,
+        legacy=args.legacy,
+        expand_all=args.expand_all,
+        scope=scope,
+    )
 
 
 def _resolve_scope(args: argparse.Namespace, cwd: Path) -> Scope:
@@ -270,6 +301,7 @@ def _serve(
     port: int,
     *,
     legacy: bool = False,
+    expand_all: bool = False,
     scope: Scope | None = None,
 ) -> int:
     """Start the local server. Hard-fails on bind errors with a clear message."""
@@ -285,7 +317,7 @@ def _serve(
         )
         return 1
 
-    app = create_app(facts, flows, legacy=legacy, scope=scope)
+    app = create_app(facts, flows, legacy=legacy, expand_all=expand_all, scope=scope)
     print(f"Solidity Flow Navigator running at http://{host}:{port}", flush=True)
     try:
         run_server(app, host, port)

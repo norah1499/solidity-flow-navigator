@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from solidity_flow_navigator.cli import _resolve_scope
+from solidity_flow_navigator.cli import _build_parser, _resolve_scope
 from solidity_flow_navigator.flow.config import ConfigError
 from solidity_flow_navigator.flow.scope import DEFAULT_SCOPE, Scope
 
@@ -396,3 +396,26 @@ def test_resolve_returns_scope_instance(tmp_path: Path) -> None:
 
     result = _resolve_scope(_args(), tmp_path)
     assert isinstance(result, Scope)
+
+
+# ---------------------------------------------------------------------------
+# --expand-all (v0.10.0)
+# ---------------------------------------------------------------------------
+
+
+def test_expand_all_flag_defaults_false() -> None:
+    """Omitting ``--expand-all`` leaves ``args.expand_all`` False so the
+    Flow page renders root-only (the default progressive-render path)."""
+    parser = _build_parser()
+    args = parser.parse_args(["some/repo"])
+    assert args.expand_all is False
+
+
+def test_expand_all_flag_parses_true() -> None:
+    """``--expand-all`` flips ``args.expand_all`` to True; the value is
+    threaded into ``create_app(expand_all=...)`` by ``main()`` and emerges
+    as ``data-expand-all="true"`` on the rendered Flow page (covered by
+    tests/serve/test_app.py::test_flow_page_expand_all_propagates_to_data_attribute)."""
+    parser = _build_parser()
+    args = parser.parse_args(["--expand-all", "some/repo"])
+    assert args.expand_all is True
