@@ -419,6 +419,141 @@
     });
   }
 
+  // ----- v0.10.0 Stage 1c (spec §10.3 "Expand-all balancing") -------------
+  //
+  // The incremental click path uses Rule 1's lastNodeRects-driven
+  // auto-balance: at each first-level expansion, the lighter side wins.
+  // Under --expand-all, every node is added BEFORE the first layout, so
+  // assignSide reads an empty lastNodeRects for the very first first-level
+  // child and ties resolve right (§10.3 item 1's documented tie-break);
+  // each subsequent first-level child inherits the same empty state and
+  // also lands right; the whole tree piles up on one side. The fix is a
+  // single global balancing pass over MEASURED extents, performed before
+  // any DOM is positioned: expand → measure (no visible apply) → balance
+  // → re-run with balanced sides → apply once. Deeper-node inheritance
+  // (Rule 2) and modifier placement (Rule 3) are unchanged.
+
+  // Measure-only dagre pass: build a fresh dagre graph from the current
+  // visibleIds + sideById, run dagre.layout, and return per-first-level
+  // subtree vertical extents (top-to-bottom span across the subtree's
+  // descendants). Mirrors the same dagre wiring relayout() uses, minus
+  // the reorder/shift/manual passes and the DOM mutation — the absolute Y
+  // values don't matter for balancing; only each first-level subtree's
+  // OWN vertical span does, and that span is determined by dagre's BFS
+  // ranking (which the reorder pass doesn't change in total span).
+  function measureFirstLevelExtents() {
+    const modIds = new Set();
+    visibleIds.forEach((id) => {
+      if (isModifierNode(nodesById.get(id))) modIds.add(id);
+    });
+    function inManual(id) {
+      for (const mid of modIds) {
+        if (id === mid || id.startsWith(mid + "/")) return true;
+      }
+      return false;
+    }
+    const zoomScale = currentScale();
+    const g = new dagre.graphlib.Graph({ multigraph: false });
+    g.setGraph({
+      rankdir: "LR",
+      nodesep: 30,
+      ranksep: 80,
+      marginx: 24,
+      marginy: 24,
+    });
+    g.setDefaultEdgeLabel(() => ({}));
+    visibleIds.forEach((id) => {
+      if (inManual(id)) return;
+      const rect = domById.get(id).getBoundingClientRect();
+      g.setNode(id, {
+        width: Math.max(80, Math.ceil(rect.width / zoomScale)),
+        height: Math.max(40, Math.ceil(rect.height / zoomScale)),
+      });
+    });
+    visibleIds.forEach((id) => {
+      if (inManual(id)) return;
+      const pid = parentIdOf(id);
+      if (pid === null || !visibleIds.has(pid)) return;
+      if (inManual(pid)) return;
+      if (sideById.get(id) === "left") g.setEdge(id, pid);
+      else g.setEdge(pid, id);
+    });
+    dagre.layout(g);
+
+    const rootId = flow.root.__id;
+    const extents = [];
+    visibleIds.forEach((id) => {
+      if (parentIdOf(id) !== rootId) return;
+      if (isModifierNode(nodesById.get(id))) return;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      const prefix = id + "/";
+      visibleIds.forEach((vid) => {
+        if (vid !== id && !vid.startsWith(prefix)) return;
+        if (!g.hasNode(vid)) return; // modifier-subtree descendants
+        const n = g.node(vid);
+        const top = n.y - n.height / 2;
+        const bot = n.y + n.height / 2;
+        if (top < minY) minY = top;
+        if (bot > maxY) maxY = bot;
+      });
+      extents.push({ id, extent: minY === Infinity ? 0 : maxY - minY });
+    });
+    return extents;
+  }
+
+  // Greedy "longest-extent first to lighter side" partition (spec §10.3
+  // "Expand-all balancing"). Tie-break matches incremental Rule 1: the
+  // right side wins when totals are equal. Stable secondary tie-break on
+  // id keeps the assignment deterministic across reloads. Returns
+  // Map<firstLevelId, "left"|"right">.
+  function balanceFirstLevelSides(extents) {
+    const sorted = [...extents].sort((a, b) => {
+      if (b.extent !== a.extent) return b.extent - a.extent;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+    const result = new Map();
+    let leftSum = 0;
+    let rightSum = 0;
+    for (const { id, extent } of sorted) {
+      if (rightSum <= leftSum) {
+        result.set(id, "right");
+        rightSum += extent;
+      } else {
+        result.set(id, "left");
+        leftSum += extent;
+      }
+    }
+    return result;
+  }
+
+  // Apply a balanced first-level side map to sideById. First-level branches
+  // get their new side directly; deeper non-modifier-subtree descendants
+  // inherit the first-level ancestor's side (Rule 2). Modifier subtree
+  // descendants remain "left" (Rule 3 — unchanged). Modifier nodes
+  // themselves have no sideById entry (manual placement). Idempotent: a
+  // first-level id whose entry is missing from newFirstLevelSides keeps
+  // its previously-assigned side (defensive — shouldn't happen since
+  // measureFirstLevelExtents enumerates every first-level child).
+  function applyBalancedSides(newFirstLevelSides) {
+    const rootId = flow.root.__id;
+    visibleIds.forEach((id) => {
+      if (id === rootId) return;
+      const node = nodesById.get(id);
+      if (isModifierNode(node)) return;
+      if (inModifierSubtree(id)) {
+        sideById.set(id, "left");
+        return;
+      }
+      let walker = id;
+      while (parentIdOf(walker) !== rootId) {
+        walker = parentIdOf(walker);
+      }
+      const newSide = newFirstLevelSides.get(walker);
+      if (newSide) sideById.set(id, newSide);
+    });
+  }
+
   // v0.9 direction-model side assignment (spec §10.3).
   //
   // Three rules, applied in order, no decisions deferred to runtime
@@ -1377,10 +1512,22 @@
   // ----- initial render ---------------------------------------------------
 
   // v0.10.0: --expand-all picks the full-tree initial state; the default
-  // remains root + auto-rendered modifiers. Either way, a single relayout
-  // and fit pass runs afterwards — the rest of the renderer is unchanged.
+  // remains root + auto-rendered modifiers. Either way, a single VISIBLE
+  // relayout and fit pass run afterwards — the rest of the renderer is
+  // unchanged. The click path is byte-for-byte the same as before
+  // Stage 1c; only the expand-all initial render adds the measure +
+  // balance + rewrite-sides step before the visible relayout.
   if (EXPAND_ALL) {
     expandAllRecursive(flow.root.__id);
+    // Stage 1c (spec §10.3 "Expand-all balancing"). Without this the
+    // bulk expansion leaves every first-level branch on the right
+    // (Rule 1 against empty lastNodeRects) and the graph renders as a
+    // single tall vertical pile. Measure subtree extents from a no-DOM
+    // dagre pass, balance the first-level sides in one greedy pass,
+    // then let the regular relayout below do the visible layout.
+    const extents = measureFirstLevelExtents();
+    const balanced = balanceFirstLevelSides(extents);
+    applyBalancedSides(balanced);
   } else {
     expandImplicit(flow.root.__id);
   }

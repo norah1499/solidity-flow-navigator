@@ -980,3 +980,50 @@ def test_flow_progressive_fit_lowers_scale_extent_for_huge_layouts(
         "fitTransform must call zoom.scaleExtent(...) to widen the lower "
         "bound when the required fit dips below the default floor."
     )
+
+
+def test_flow_progressive_balances_expand_all_first_level_sides(
+    client: FlaskClient,
+) -> None:
+    """The progressive renderer must run a global balancing pass before the
+    visible relayout under ``--expand-all`` (spec §10.3 "Expand-all
+    balancing").
+
+    Without this pass, Rule 1's auto-balance reads an empty
+    ``lastNodeRects`` for every first-level branch and ties resolve right,
+    so the whole tree piles on one side. Stage 1c adds three helpers —
+    ``measureFirstLevelExtents`` (no-DOM dagre run that returns per-branch
+    vertical extent), ``balanceFirstLevelSides`` (greedy partition: longest
+    first to the lighter side), and ``applyBalancedSides`` (rewrites
+    sideById so first-level branches reflect the partition and deeper
+    nodes inherit, matching Rule 2; modifier-subtree descendants stay
+    "left" per Rule 3). All three must be present and the EXPAND_ALL init
+    block must call them in order. pytest cannot run the JS, but pinning
+    the helper names and the call shape catches accidental deletion.
+    """
+    rv = client.get("/static/js/flow-progressive.js")
+    js = rv.get_data(as_text=True)
+    for helper in (
+        "measureFirstLevelExtents",
+        "balanceFirstLevelSides",
+        "applyBalancedSides",
+    ):
+        assert helper in js, (
+            f"flow-progressive.js must define {helper} for the v0.10.0 "
+            f"Stage 1c expand-all balancing pass (spec §10.3 'Expand-all "
+            f"balancing')."
+        )
+    # The EXPAND_ALL init block must wire all three helpers together: the
+    # measurement feeds the balancer, whose result feeds the side rewrite.
+    # Pin the exact call shape so a refactor that swaps the order or
+    # silently drops a step trips this test rather than regressing recall.
+    expected = (
+        "const extents = measureFirstLevelExtents();\n"
+        "    const balanced = balanceFirstLevelSides(extents);\n"
+        "    applyBalancedSides(balanced);"
+    )
+    assert expected in js, (
+        "EXPAND_ALL init block must call measureFirstLevelExtents() → "
+        "balanceFirstLevelSides() → applyBalancedSides() in that order "
+        "before the visible relayout (v0.10.0 Stage 1c)."
+    )
