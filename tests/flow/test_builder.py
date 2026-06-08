@@ -2061,3 +2061,259 @@ def test_sablier_shape_three_contract_chain_resolves_to_mid() -> None:
     )
     assert child.declarer_contract_name == "SablierLockupBase"
     assert child.invoked_via_contract_name == "SablierLockup"
+
+
+# ---------------------------------------------------------------------------
+# 15. v0.10.2 — dedup CFG-branch-duplicated call children
+# (PoolManager._swap double-emit). Synthetic facts isolate the dedup contract
+# from any real Slither/Foundry round-trip. The contract is:
+#   1. Two CallEdges sharing BOTH target_canonical_name AND source_location
+#      (offset+length identical) collapse to exactly one child.
+#   2. Same line, different target — kept (the §11.10 previewDeposit-inside-
+#      require shape: sub-expression and enclosing call share a line, but
+#      have different targets).
+#   3. Same target, different mapping — kept (two genuine call sites to the
+#      same callee).
+# ---------------------------------------------------------------------------
+
+
+def _sl_at(
+    filename_relative: str,
+    *,
+    start: int,
+    length: int,
+    lines: tuple[int, ...],
+):
+    """Build a SourceLocation parameterized by byte offset, length, and lines.
+
+    Mirrors ``_sl`` (defined earlier in this file) but lets each test pin
+    the exact mapping that drives the v0.10.2 dedup key. Column fields are
+    fixed because they are not part of the dedup key.
+    """
+
+    from solidity_flow_navigator.analysis.types import SourceLocation
+
+    return SourceLocation(
+        filename_absolute="/abs/" + filename_relative,
+        filename_relative=filename_relative,
+        start=start,
+        length=length,
+        lines=lines,
+        starting_column=1,
+        ending_column=2,
+    )
+
+
+def _make_internal_callee(name: str, declarer: str):
+    """Build an internal Function we can target with a CallEdge."""
+
+    from solidity_flow_navigator.analysis.types import Function
+
+    return Function(
+        canonical_name=f"{declarer}.{name}()",
+        name=name,
+        full_name=f"{name}()",
+        contract_declarer_name=declarer,
+        visibility="internal",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl(f"src/{declarer}.sol"),
+        source_code=f"function {name}() internal {{}}",
+        calls=(),
+    )
+
+
+def _make_entry(name: str, declarer: str, calls: tuple):
+    """Build an external entry-point Function that holds the given calls."""
+
+    from solidity_flow_navigator.analysis.types import Function
+
+    return Function(
+        canonical_name=f"{declarer}.{name}()",
+        name=name,
+        full_name=f"{name}()",
+        contract_declarer_name=declarer,
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl(f"src/{declarer}.sol"),
+        source_code=f"function {name}() external {{}}",
+        calls=calls,
+    )
+
+
+def _make_contract(name: str, functions: tuple):
+    """Build a one-off concrete contract with the given declared functions."""
+
+    from solidity_flow_navigator.analysis.types import Contract
+
+    return Contract(
+        name=name,
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl(f"src/{name}.sol"),
+        functions=functions,
+        modifiers=(),
+    )
+
+
+def _internal_edge_to(callee, *, source_location):
+    """Build a kind='internal' CallEdge pointing at ``callee`` at
+    ``source_location``."""
+
+    from solidity_flow_navigator.analysis.types import CallEdge
+
+    return CallEdge(
+        kind="internal",
+        subkind=None,
+        target_canonical_name=callee.canonical_name,
+        target_function_name=callee.name,
+        target_contract_name=callee.contract_declarer_name,
+        is_resolved=True,
+        source_location=source_location,
+    )
+
+
+def test_cfg_branch_dup_same_target_and_mapping_collapse_to_one_child() -> None:
+    """Two CallEdges sharing both target AND source_location collapse to one
+    child — the PoolManager._swap double-emit shape: the same call op shows
+    up on two CFG fork branches with an IDENTICAL source mapping (start,
+    length, lines all equal).
+    """
+
+    from solidity_flow_navigator.analysis.types import RepoFacts
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    helper = _make_internal_callee("h", "App")
+    # Both edges describe the SAME source call statement on the SAME branch
+    # of a forked CFG — identical (start, length, lines).
+    mapping = _sl_at("src/App.sol", start=100, length=20, lines=(5,))
+    edge_a = _internal_edge_to(helper, source_location=mapping)
+    edge_b = _internal_edge_to(helper, source_location=mapping)
+    entry = _make_entry("entry", "App", calls=(edge_a, edge_b))
+    app = _make_contract("App", functions=(entry, helper))
+    facts = RepoFacts(repo_path="/abs", contracts=(app,), free_functions=())
+
+    flows = build_flows(facts, Scope())
+    assert len(flows) == 1
+    children = flows[0].root.children
+    assert len(children) == 1, (
+        f"expected 1 child after CFG-branch dedup (two edges sharing target "
+        f"and source mapping); got {len(children)}: "
+        f"{[getattr(c, 'canonical_name', type(c).__name__) for c in children]}"
+    )
+    child = children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.canonical_name == "App.h()"
+    assert child.call_site_line == 5
+
+
+def test_cfg_branch_dup_same_line_different_target_preserved() -> None:
+    """Two CallEdges sharing a line number but pointing at DIFFERENT targets
+    must not collapse — guards the §11.10 previewDeposit-inside-require
+    case (sub-expression and enclosing call share a source line but have
+    different targets, so the dedup key's identity half differs).
+
+    The mappings differ in start/length too (the sub-expression and the
+    enclosing call have distinct byte ranges), reflecting reality: Slither
+    populates start/length on both. Identity alone is sufficient to keep
+    them separate; the differing mapping reinforces it.
+    """
+
+    from solidity_flow_navigator.analysis.types import RepoFacts
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    inner = _make_internal_callee("inner", "App")
+    outer = _make_internal_callee("outer", "App")
+    inner_edge = _internal_edge_to(
+        inner,
+        source_location=_sl_at("src/App.sol", start=200, length=10, lines=(7,)),
+    )
+    outer_edge = _internal_edge_to(
+        outer,
+        source_location=_sl_at("src/App.sol", start=200, length=30, lines=(7,)),
+    )
+    entry = _make_entry("entry", "App", calls=(inner_edge, outer_edge))
+    app = _make_contract("App", functions=(entry, inner, outer))
+    facts = RepoFacts(repo_path="/abs", contracts=(app,), free_functions=())
+
+    flows = build_flows(facts, Scope())
+    assert len(flows) == 1
+    children = flows[0].root.children
+    assert len(children) == 2, (
+        f"expected 2 children (same line, different targets must stay "
+        f"separate per §11.10); got {len(children)}: "
+        f"{[getattr(c, 'canonical_name', type(c).__name__) for c in children]}"
+    )
+    canonical_names = {c.canonical_name for c in children}  # type: ignore[union-attr]
+    assert canonical_names == {"App.inner()", "App.outer()"}, (
+        f"both targets must survive; got {canonical_names}"
+    )
+
+
+def test_distinct_call_sites_to_same_target_preserved() -> None:
+    """Two CallEdges to the same target at DIFFERENT source mappings must
+    not collapse — they are two legitimate call sites of the same callee,
+    not a CFG-branch duplication of a single call.
+    """
+
+    from solidity_flow_navigator.analysis.types import RepoFacts
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    helper = _make_internal_callee("h", "App")
+    call_a = _internal_edge_to(
+        helper,
+        source_location=_sl_at("src/App.sol", start=300, length=10, lines=(11,)),
+    )
+    call_b = _internal_edge_to(
+        helper,
+        source_location=_sl_at("src/App.sol", start=400, length=10, lines=(13,)),
+    )
+    entry = _make_entry("entry", "App", calls=(call_a, call_b))
+    app = _make_contract("App", functions=(entry, helper))
+    facts = RepoFacts(repo_path="/abs", contracts=(app,), free_functions=())
+
+    flows = build_flows(facts, Scope())
+    assert len(flows) == 1
+    children = flows[0].root.children
+    assert len(children) == 2, (
+        f"expected 2 children (two distinct call sites to the same callee "
+        f"must not collapse); got {len(children)}"
+    )
+    for child in children:
+        assert isinstance(child, FunctionNode)
+        assert child.canonical_name == "App.h()"
+    # The two children are ordered by source line (v0.6.1 stable sort).
+    assert [c.call_site_line for c in children] == [11, 13], (  # type: ignore[union-attr]
+        f"expected call_site_lines [11, 13] after sort; got "
+        f"{[c.call_site_line for c in children]}"  # type: ignore[union-attr]
+    )

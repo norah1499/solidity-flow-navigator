@@ -432,10 +432,28 @@ class _FlowBuilder:
         Stable sort: children with no resolvable source line (defensive —
         every CallEdge currently carries a source_location) keep their
         pre-sort relative order via Python's ``list.sort`` stability.
+
+        v0.10.2 CFG-branch dedup: Slither forks the CFG on ternaries and
+        short-circuiting boolean operators in argument position and emits
+        the SAME call SlithIR op on each fork branch with an IDENTICAL
+        source_mapping (covering the full call statement). Layer 1 surfaces
+        each op as its own CallEdge, so one source-level call shows up here
+        as N edges with the same target canonical name and identical
+        source_location. We collapse children that share BOTH the resolved
+        target identity AND the originating edge's source mapping. The
+        deliberate non-matches:
+          - same line, different target: the §11.10 previewDeposit-inside-
+            require case (sub-expression and enclosing call share a line
+            but have different targets) — different identity, kept;
+          - same target, different mapping: two genuine call sites to the
+            same callee — different mapping, kept.
+        Dedup runs BEFORE the stable sort so the v0.6.1 source-line
+        ordering operates on the deduped set and is unaffected.
         """
 
         children: list[FlowNode] = []
         builtins: list[str] = []
+        seen_keys: set[tuple] = set()
         for edge in calls:
             result = self._dispatch_edge(
                 edge,
@@ -446,8 +464,12 @@ class _FlowBuilder:
                 continue
             if isinstance(result, str):
                 builtins.append(result)
-            else:
-                children.append(result)
+                continue
+            key = (_child_identity(result), _edge_mapping_key(edge))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            children.append(result)
         children.sort(key=_child_source_line_key)
         return tuple(children), tuple(builtins)
 
@@ -788,6 +810,50 @@ def _summarize_subtree(root: FlowNode) -> tuple[int, int]:
         return (1, 0)
     # ExternalNode
     return (0, 0)
+
+
+def _edge_mapping_key(edge: CallEdge) -> tuple:
+    """Finest-granularity source-mapping key for the v0.10.2 CFG-branch dedup
+    in ``_FlowBuilder._process_calls``.
+
+    Prefers ``(start, length)`` — the byte offset and length of the call
+    statement, what Slither's source_mapping carries when crytic-compile
+    produced byte-accurate source maps (the live case on Foundry projects,
+    confirmed by docs/probes/v0_10_2_stage1_swap_double_emit_probe.py:
+    PoolManager.swap's _swap edges both carry start=10157 length=475).
+    Falls back to the ``lines`` tuple only if either component is missing,
+    so any future CallEdge whose mapping is line-only still deduplicates
+    correctly.
+
+    The two key shapes are namespaced ("ol" vs "ln") so an offset+length
+    key can never collide with a lines-only key — important because line
+    numbers and byte offsets can numerically overlap.
+    """
+    sl = edge.source_location
+    if sl.start is not None and sl.length is not None:
+        return ("ol", sl.start, sl.length)
+    return ("ln", tuple(sl.lines))
+
+
+def _child_identity(node: FlowNode) -> tuple:
+    """Target identity used as the non-mapping half of the v0.10.2 dedup key.
+
+    For ``FunctionNode`` and ``ExternalNode`` the identity is the resolved
+    canonical name — post-§11.5 virtual-dispatch resolution for function
+    nodes, so two duplicated edges that re-resolve through the same C3
+    chain compare equal. For ``UnresolvedNode`` no canonical name exists;
+    we use ``(raw_kind, raw_subkind, descriptor)`` so two unresolved
+    children dedupe only when they came from the same kind of opaque
+    dispatch with the same descriptor — e.g. an interface call duplicated
+    by a CFG fork — while distinct unresolved kinds at the same site stay
+    separate. Namespacing by tag prefix ("fn"/"ext"/"unr") keeps the three
+    spaces from colliding.
+    """
+    if isinstance(node, FunctionNode):
+        return ("fn", node.canonical_name)
+    if isinstance(node, ExternalNode):
+        return ("ext", node.target_canonical_name)
+    return ("unr", node.raw_kind, node.raw_subkind, node.descriptor)
 
 
 def _child_source_line_key(node: FlowNode) -> float:
