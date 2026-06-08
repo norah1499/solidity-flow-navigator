@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solidity-flow-navigator"
-version = "0.10.2"
+version = "0.10.3"
 description = "Per-entry-point navigable call-graph visualizations of Solidity repositories, for Web3 security auditors."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,6 @@ keywords = ["solidity", "security", "audit", "static-analysis", "slither"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: GNU Affero General Public License v3",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
