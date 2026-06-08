@@ -319,6 +319,15 @@ code, pre { font-family: var(--font-mono); }
   text-align: center;
 }
 
+/* v0.10.1 source link in the privacy footer: the only interactive element in
+   the footer (§8.3). Overrides the muted-chrome color the rest of the footer
+   inherits so the link reads as a link. --node-mod-border carries the ink-blue
+   tuned for both light and dark mode (light #3a6db0, dark #6b94c8). */
+.privacy-footer .source-link {
+  color: var(--node-mod-border);
+  text-decoration: underline;
+}
+
 /* ----- flow page (Stage 1 placeholder) ----------------------------------- */
 
 /* v0.6: `.flow-nav` is viewport-fixed (top-left) so the `← index` button

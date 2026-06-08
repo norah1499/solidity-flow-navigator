@@ -614,13 +614,20 @@ def test_index_per_entry_metadata_omits_unresolved_when_zero(
 
 def test_index_privacy_footer_present(client: FlaskClient) -> None:
     """Spec §8.3: privacy footer at the bottom of the page documents the
-    localhost-only execution model. Exact text is required so the auditor
+    localhost-only execution model AND links to the public repository so a
+    party running a hosted instance can reach the AGPL-3.0 Corresponding
+    Source (section 13 of the license). Exact text is required so the auditor
     sees the canonical assurance phrasing on every render."""
     rv = client.get("/")
     body = rv.get_data(as_text=True)
     assert '<p class="privacy-footer">' in body
     assert (
-        "All analysis local · code never uploaded · server bound to 127.0.0.1" in body
+        "All analysis local · code never uploaded · server bound to 127.0.0.1 · "
+        in body
+    )
+    assert (
+        '<a class="source-link" href="https://github.com/norah1499/solidity-flow-navigator">source</a>'
+        in body
     )
 
 
