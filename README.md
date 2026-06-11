@@ -1,5 +1,7 @@
 # SolFlow (Solidity Flow Navigator)
 
+[![CI](https://github.com/norah1499/solidity-flow-navigator/actions/workflows/ci.yml/badge.svg)](https://github.com/norah1499/solidity-flow-navigator/actions/workflows/ci.yml)
+
 Compiles a Solidity repository, extracts call-graph facts with Slither, and serves an interactive call-flow visualization in your browser. Built for smart contract auditing.
 
 ## What it does, and does not
