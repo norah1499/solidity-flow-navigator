@@ -49,6 +49,16 @@ Full flag reference: `solflow --help`. Flags group into **Scope**, **Resolution*
 
 `--expand-all` opens every Flow fully expanded for a bird's-eye view.
 
+## Contributing
+
+Issues and pull requests are welcome. Before opening a PR, make sure these pass:
+
+```bash
+pytest
+black --check .
+ruff check
+```
+
 ## License
 
 AGPL-3.0. SolFlow builds on Slither and crytic-compile, both AGPL-3.0. If you host an instance for others, the license requires offering them the source; the index footer links back here.
