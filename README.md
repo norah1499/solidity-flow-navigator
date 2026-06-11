@@ -6,6 +6,18 @@ Compiles a Solidity repository, extracts call-graph facts with Slither, and serv
 
 Shows how calls flow through a contract: entry points, callees, modifiers, and unresolved branches, laid out for fast navigation. Not a vulnerability scanner; makes no security claims. Unresolved branches are always marked as unresolved rather than guessed, so the picture never silently lies (P4).
 
+## Screenshots
+
+The index lists every external entry point of the analyzed repository (here: Morpho Blue):
+
+![Index view listing the entry points of Morpho Blue](docs/index-morpho.png)
+
+Opening an entry point renders its full call flow — every callee panel shows the real source:
+
+![Expanded call-flow graph of Morpho.liquidate](docs/flow-liquidate-overview.png)
+
+![Zoomed view of the liquidate flow with inherited library functions](docs/flow-liquidate-detail.png)
+
 ## Requirements
 
 - Python 3.11+
