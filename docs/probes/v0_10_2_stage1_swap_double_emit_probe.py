@@ -75,7 +75,9 @@ def main() -> int:
     _hr("Layer 1: compile_repo + extract_facts")
     cc: CryticCompile = compile_repo(REPO)
     facts = extract_facts(cc, REPO)
-    print(f"  contracts: {len(facts.contracts)}  free_functions: {len(facts.free_functions)}")
+    print(
+        f"  contracts: {len(facts.contracts)}  free_functions: {len(facts.free_functions)}"
+    )
 
     # Locate PoolManager.swap in Layer 1 facts.
     swap_func = None
@@ -130,8 +132,12 @@ def main() -> int:
         print("FAIL: could not locate PoolManager.swap Flow", file=sys.stderr)
         return 4
     print(f"  flows total: {len(flows)}")
-    print(f"  swap_flow.entry_point_invoker_canonical_name = {swap_flow.entry_point_invoker_canonical_name}")
-    print(f"  swap_flow.root.canonical_name                = {swap_flow.root.canonical_name}")
+    print(
+        f"  swap_flow.entry_point_invoker_canonical_name = {swap_flow.entry_point_invoker_canonical_name}"
+    )
+    print(
+        f"  swap_flow.root.canonical_name                = {swap_flow.root.canonical_name}"
+    )
     print(f"  swap_flow.root has {len(swap_flow.root.children)} child(ren)")
 
     _hr("(a) Layer 2 Flow: swap root children")
@@ -200,10 +206,14 @@ def main() -> int:
             if tgt_name == TARGET_CALLEE_NAME:
                 raw_ops.append((n_idx, ir_idx, op))
 
-    print(f"  total CFG nodes in swap:                              {len(sl_swap.nodes)}")
+    print(
+        f"  total CFG nodes in swap:                              {len(sl_swap.nodes)}"
+    )
     print(f"  IR ops across all CFG nodes whose target is '_swap':  {len(raw_ops)}")
     internal_call_count = sum(1 for _, _, op in raw_ops if isinstance(op, InternalCall))
-    print(f"    of which InternalCall instances:                    {internal_call_count}")
+    print(
+        f"    of which InternalCall instances:                    {internal_call_count}"
+    )
 
     seen_keys: set[tuple] = set()
     for k, (n_idx, ir_idx, op) in enumerate(raw_ops):
@@ -234,7 +244,10 @@ def main() -> int:
     print(f"(c) Layer 1 _swap CallEdge cnt: {len(swap_edges)}")
     if swap_edges:
         e0 = swap_edges[0]
-        has_offset = e0.source_location.start is not None and e0.source_location.length is not None
+        has_offset = (
+            e0.source_location.start is not None
+            and e0.source_location.length is not None
+        )
         print(
             f"    source_location granularity: {'offset+length' if has_offset else 'line-only'}"
         )
@@ -251,10 +264,7 @@ def main() -> int:
             )
             for e in swap_edges
         )
-        print(
-            "    all CallEdge source_locations identical: "
-            f"{all_identical}"
-        )
+        print("    all CallEdge source_locations identical: " f"{all_identical}")
     print(f"(d) Slither _swap op total   : {len(raw_ops)}")
     print(f"    of which InternalCall    : {internal_call_count}")
     print(f"    distinct source_mappings : {len(seen_keys)}")

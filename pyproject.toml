@@ -37,7 +37,7 @@ Issues = "https://github.com/norah1499/solidity-flow-navigator/issues"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0,<9.0",
-    "black>=24.0",
+    "black>=26,<27",
     "ruff>=0.5",
 ]
 
@@ -69,8 +69,11 @@ select = ["E", "F", "I", "B", "UP"]
 # scaffold files committed in bd475e3 carry such docstrings; rather than
 # wrapping them, we ignore E501 file-by-file so any future per-line lint
 # remains in force.
+# docs/probes/ holds historical diagnostic scripts whose long aligned print
+# lines are kept verbatim as reference artifacts.
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["E501"]
+"docs/probes/*" = ["E501"]
 "src/solidity_flow_navigator/flow/builder.py" = ["E501"]
 "src/solidity_flow_navigator/flow/scope.py" = ["E501"]
 "src/solidity_flow_navigator/flow/types.py" = ["E501"]

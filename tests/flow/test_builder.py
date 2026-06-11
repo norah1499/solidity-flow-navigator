@@ -2274,9 +2274,10 @@ def test_cfg_branch_dup_same_line_different_target_preserved() -> None:
         f"{[getattr(c, 'canonical_name', type(c).__name__) for c in children]}"
     )
     canonical_names = {c.canonical_name for c in children}  # type: ignore[union-attr]
-    assert canonical_names == {"App.inner()", "App.outer()"}, (
-        f"both targets must survive; got {canonical_names}"
-    )
+    assert canonical_names == {
+        "App.inner()",
+        "App.outer()",
+    }, f"both targets must survive; got {canonical_names}"
 
 
 def test_distinct_call_sites_to_same_target_preserved() -> None:
