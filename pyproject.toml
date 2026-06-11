@@ -19,6 +19,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Security",
     "Topic :: Software Development :: Quality Assurance",
 ]
@@ -27,7 +29,7 @@ dependencies = [
     "slither-analyzer>=0.11.5,<0.12",
     "Flask>=3.0,<4.0",
     "Pygments>=2.17,<3.0",
-    "pathspec==1.1.1",
+    "pathspec>=1.1.1,<2",
 ]
 
 [project.urls]
