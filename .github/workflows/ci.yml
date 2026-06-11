@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install ".[dev]"
+      - run: black --check .
+      - run: ruff check
+      # The 69 Solmate integration tests skip here: the sibling
+      # test-repos/solmate clone and Foundry are not installed in CI
+      # (see tests/conftest.py). They remain part of the local gate.
+      - run: pytest -q
