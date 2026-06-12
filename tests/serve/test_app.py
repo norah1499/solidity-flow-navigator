@@ -1007,3 +1007,50 @@ def test_flow_progressive_balances_expand_all_first_level_sides(
         "balanceFirstLevelSides() → applyBalancedSides() in that order "
         "before the visible relayout (v0.10.0 Stage 1c)."
     )
+
+
+def test_flow_progressive_relation_badges_and_title_qualification(
+    client: FlaskClient,
+) -> None:
+    """v0.10.4 relation labeling (spec §10.2): the renderer must key the
+    title's qualifying contract and the relation badge off ``call_kind``.
+
+    Pre-v0.10.4 the renderer titled every node by the Flow invoker and
+    badged 'inherited from {declarer}' on ANY declarer/invoker mismatch,
+    which presented Morpho Blue's IOracle.price() external call as
+    'Morpho.price(...), inherited from IOracle' — an inverted trust-boundary
+    claim. pytest cannot run the JS; pin the discriminator, the two badge
+    labels, and that the inherited badge no longer keys off the bare
+    mismatch alone.
+    """
+    rv = client.get("/static/js/flow-progressive.js")
+    js = rv.get_data(as_text=True)
+    assert 'node.call_kind === "library" || node.call_kind === "external"' in js, (
+        "renderFunctionNode must derive declarer-qualified titles from "
+        "call_kind (spec §10.2 v0.10.4 title qualification)."
+    )
+    assert '"external call"' in js, (
+        "external relation badge label 'external call' missing (spec §10.2 "
+        "'Relation badges')."
+    )
+    assert (
+        "badge-library" in js and '"library"' in js
+    ), "library relation badge missing (spec §10.2 'Relation badges')."
+    assert 'node.call_kind === "external"' in js, (
+        "relation badge selection must branch on call_kind, not on the "
+        "declarer/invoker mismatch alone."
+    )
+
+
+def test_main_css_styles_relation_badges(client: FlaskClient) -> None:
+    """The two v0.10.4 relation badge classes must be styled: `external call`
+    reuses the dashed --node-external-border outline (same visual language
+    as ExternalNode pills), `library` the muted outline of badge-inherited."""
+    rv = client.get("/static/css/main.css")
+    css = rv.get_data(as_text=True)
+    assert (
+        ".badge-external-call" in css
+    ), "main.css must style .badge-external-call (v0.10.4 relation badges)."
+    assert (
+        ".badge-library" in css
+    ), "main.css must style .badge-library (v0.10.4 relation badges)."

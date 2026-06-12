@@ -134,27 +134,51 @@
     // v0.7.0 title bar (spec §10.2). The short-form title lands in its own
     // row above the source body, painted on a slightly darker cream than
     // the node interior with a thin dark-ink rule separating it from the
-    // body. Mirrors the same construction in flow.js (legacy renderer).
+    // body. v0.10.4 title qualification (spec §10.2): library and external
+    // children are titled by the contract that DECLARES them — titling
+    // SafeTransferLib.safeTransfer or IOracle.price by the Flow's invoker
+    // would misstate the trust boundary. Internal children (and the root
+    // and modifiers, call_kind null) keep the invoked-via qualification of
+    // the v0.9 inheritance model.
+    const declarerQualified = node.call_kind === "library" || node.call_kind === "external";
+    const titleContract = declarerQualified
+      ? node.declarer_contract_name
+      : node.invoked_via_contract_name;
     const titleBar = el("div", "node-title-bar");
     titleBar.appendChild(
-      el(
-        "code",
-        null,
-        node.invoked_via_contract_name + "." + shortenSignature(node.full_name),
-      ),
+      el("code", null, titleContract + "." + shortenSignature(node.full_name)),
     );
     wrap.appendChild(titleBar);
 
     // Badges row: only emitted when at least one badge applies. An empty
     // .node-head would otherwise carry its `margin-bottom: 0.5rem` for no
-    // visible content.
+    // visible content. v0.10.4 relation badges (spec §10.2): at most one of
+    // `external call` / `library` / `inherited from {declarer}` — the
+    // inherited badge fires only for internal relations, no longer on any
+    // declarer/invoker mismatch (which mislabeled library and bound
+    // interface calls as inheritance).
     const badges = el("span", "node-badges");
     if (node.is_modifier) badges.appendChild(el("span", "badge badge-modifier", "modifier"));
     if (node.invoked_via_super) badges.appendChild(el("span", "badge badge-super", "super"));
-    if (node.invoked_via_contract_name !== node.declarer_contract_name) {
-      badges.appendChild(
-        el("span", "badge badge-inherited", "inherited from " + node.declarer_contract_name),
+    if (node.call_kind === "external") {
+      const b = el("span", "badge badge-external-call", "external call");
+      b.setAttribute("title", "high-level call onto another contract or interface");
+      badges.appendChild(b);
+    } else if (node.call_kind === "library") {
+      const b = el("span", "badge badge-library", "library");
+      b.setAttribute("title", "library call — declared on " + node.declarer_contract_name);
+      badges.appendChild(b);
+    } else if (node.invoked_via_contract_name !== node.declarer_contract_name) {
+      const b = el(
+        "span",
+        "badge badge-inherited",
+        "inherited from " + node.declarer_contract_name,
       );
+      b.setAttribute(
+        "title",
+        "declared on " + node.declarer_contract_name + ", reached via inheritance",
+      );
+      badges.appendChild(b);
     }
     if (badges.children.length > 0) {
       const head = el("div", "node-head");

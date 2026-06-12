@@ -572,6 +572,22 @@ body.flow-page .flow-header {
   border: 0.5px dashed var(--node-external-border);
 }
 
+/* v0.10.4 relation badges (spec §10.2). `external call` reuses the dashed
+   --node-external-border outline ExternalNode pills already carry, so "this
+   crosses a contract boundary" reads the same everywhere; `library` mirrors
+   the muted-outline style of badge-inherited (a neutral relation, no trust
+   alarm). No new palette tokens. */
+.badge-external-call {
+  background: transparent;
+  color: var(--fg-text);
+  border: 0.5px dashed var(--node-external-border);
+}
+.badge-library {
+  background: transparent;
+  color: var(--fg-muted);
+  border: 0.5px solid var(--border-soft);
+}
+
 /* v0.7.0 title bar: dedicated header row above the source body carrying the
    short-form title on a slightly darker cream background, separated from the
    body by a thin dark-ink rule. Negative margins counteract the .node's
