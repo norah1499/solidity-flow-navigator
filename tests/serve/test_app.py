@@ -26,7 +26,7 @@ from flask.testing import FlaskClient
 
 from solidity_flow_navigator.analysis.types import RepoFacts
 from solidity_flow_navigator.flow.types import Flow
-from solidity_flow_navigator.serve.app import build_index, create_app
+from solidity_flow_navigator.serve.app import _safe_json, build_index, create_app
 
 
 @pytest.fixture(scope="module")
@@ -896,13 +896,20 @@ _FLOW_DATA_RE = re.compile(
 )
 
 
-def _undefang(s: str) -> str:
-    """Reverse ``serve.app._safe_json``'s defang substitutions."""
-    return (
-        s.replace("<\\/", "</")
-        .replace("<\\!--", "<!--")
-        .replace("<\\script", "<script")
-    )
+def test_safe_json_defangs_script_breakouts_and_stays_valid_json() -> None:
+    """``_safe_json`` must prevent ``</script>`` tag breakout AND remain
+    parseable JSON. A previous implementation backslash-escaped the
+    raw characters (``<\\!--``, ``<\\script``), which are invalid JSON
+    escapes — any analyzed source containing ``<!--`` or ``<script`` (e.g.
+    in a NatSpec comment) made the client's ``JSON.parse`` throw and the
+    flow page render blank. Escaping ``<`` as ``\\u003c`` covers every
+    breakout substring while round-tripping cleanly."""
+    payload = {"src": "a </script><script>alert(1)</script> <!-- b"}
+    encoded = _safe_json(payload)
+    assert "</" not in encoded, "raw </ would terminate the embedding tag"
+    assert "<script" not in encoded
+    assert "<!--" not in encoded
+    assert json.loads(encoded) == payload, "defanged output must stay valid JSON"
 
 
 def test_flow_page_routes_colliding_canonicals_distinctly(
@@ -933,9 +940,10 @@ def test_flow_page_routes_colliding_canonicals_distinctly(
     owned_match = _FLOW_DATA_RE.search(owned_body)
     mock_match = _FLOW_DATA_RE.search(mock_body)
     assert owned_match is not None and mock_match is not None
-    # Reverse the ``_safe_json`` defang substitutions before parsing.
-    owned_data = json.loads(_undefang(owned_match.group(1)))
-    mock_data = json.loads(_undefang(mock_match.group(1)))
+    # ``_safe_json`` output is valid JSON (``<`` is emitted as the standard
+    # escape ``\u003c``), so the embedded payload parses directly.
+    owned_data = json.loads(owned_match.group(1))
+    mock_data = json.loads(mock_match.group(1))
 
     assert owned_data != mock_data, "colliding routes returned identical payloads"
     assert owned_data["entry_point_contract_name"] == "Owned"

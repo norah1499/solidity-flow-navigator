@@ -353,17 +353,16 @@ def create_app(
 def _safe_json(obj: Any) -> str:
     """JSON-encode for inline ``<script type="application/json">`` embedding.
 
-    The script type is non-executable, but we still defang ``</`` so a stray
-    ``</script>`` substring inside a string literal can't terminate the tag.
-    The other escapes (``<!--``, ``<script``) are belt-and-braces against
-    HTML-comment-eating browsers.
+    The script type is non-executable, but a stray ``</script>`` substring
+    inside a string literal would still terminate the tag, and ``<!--`` /
+    ``<script`` confuse HTML-comment-eating browsers. Emitting every ``<``
+    as the JSON escape ``\\u003c`` defangs all three at once. ``<`` only
+    occurs inside string literals (JSON syntax itself never contains it),
+    and ``\\u003c`` is *valid* JSON — unlike backslash-escaping the raw
+    characters — so the client's ``JSON.parse`` round-trips the payload
+    unchanged even when the analyzed source contains those substrings.
     """
-    return (
-        json.dumps(obj, ensure_ascii=False)
-        .replace("</", "<\\/")
-        .replace("<!--", "<\\!--")
-        .replace("<script", "<\\script")
-    )
+    return json.dumps(obj, ensure_ascii=False).replace("<", "\\u003c")
 
 
 # ---------------------------------------------------------------------------
