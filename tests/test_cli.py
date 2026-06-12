@@ -492,3 +492,25 @@ def test_help_uses_four_argument_groups() -> None:
             f"--help is missing the {label!r} argument group "
             "(v0.10.0 Stage 3 regrouping)."
         )
+
+
+def test_version_flag_prints_version_and_exits(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """v0.13.0 (spec §11.2 / §14.1): ``solflow --version`` prints
+    ``solflow <version>`` and exits 0. The version comes from the installed
+    distribution's metadata, so this asserts the shape rather than a literal
+    value. ``solflow unknown`` means the metadata fallback fired, which in a
+    dev or CI environment (editable or normal install present) is a real
+    failure — most likely the editable install predates the v0.11.x
+    distribution rename and needs ``pip install -e . --no-deps`` rerun.
+    """
+    with pytest.raises(SystemExit) as exc:
+        _build_parser().parse_args(["--version"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("solflow "), f"unexpected --version output: {out!r}"
+    assert out != "solflow unknown", (
+        "--version fell back to 'unknown': no 'solflow' distribution "
+        "metadata found in this environment."
+    )

@@ -49,6 +49,7 @@ etc.) propagate as Python tracebacks so wrapper bugs stay debuggable.
 
 import argparse
 import errno
+import importlib.metadata
 import socket
 import sys
 from collections.abc import Sequence
@@ -78,6 +79,20 @@ DEFAULT_PORT = 8080
 # than a port miss.
 PORT_PROBE_LIMIT = 64
 DEFAULT_CONFIG_FILENAME = "solflow.toml"
+
+
+def _distribution_version() -> str:
+    """Version of the installed ``solflow`` distribution.
+
+    Read from package metadata so pyproject stays the single source of
+    truth (spec §14.1, v0.13.0). Falls back to ``"unknown"`` when no
+    metadata is resolvable — e.g. running from a source tree without an
+    editable install — rather than failing the parser build.
+    """
+    try:
+        return importlib.metadata.version("solflow")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -111,6 +126,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "repo_path",
         help="Path to the Solidity repository root (crytic-compile target).",
+    )
+    # Top-level alongside -h, deliberately outside the four argument
+    # groups: tool chrome, not a Scope/Resolution/Rendering/Server
+    # concern (spec §11.2, §14.1 v0.13.0).
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_distribution_version()}",
+        help="Print the solflow version and exit.",
     )
 
     # ------------------------------------------------------------------
