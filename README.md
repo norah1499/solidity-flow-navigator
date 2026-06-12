@@ -43,7 +43,7 @@ solflow path/to/your/solidity/project
 
 Point it at the repository root, where Slither can resolve dependencies. SolFlow compiles the project, binds `127.0.0.1:8080` (or the next free port), and prints the URL.
 
-Compilation goes through [crytic-compile](https://github.com/crytic/crytic-compile), so any build system it detects should work (Foundry, Hardhat, Truffle, Brownie, plain solc); Foundry projects are what SolFlow is tested against. If compilation fails, SolFlow prints the compiler error verbatim and exits without producing anything. No partial Flows, by design: a half-compiled picture would silently mislead. The usual fix is matching the project's pragma with `solc-select use <version>`.
+Compilation goes through [crytic-compile](https://github.com/crytic/crytic-compile), so any build system it detects should work (Foundry, Hardhat, Truffle, Brownie, plain solc); Foundry projects are what SolFlow is tested against. If anything goes wrong on the first run, see [If the first run fails](#if-the-first-run-fails) below.
 
 Useful flags (run `solflow --help` for the full reference, grouped into **Scope**, **Resolution**, **Rendering**, and **Server**):
 
@@ -53,6 +53,17 @@ Useful flags (run `solflow --help` for the full reference, grouped into **Scope*
 | `--exclude-path GLOB`, `--exclude-contract PATTERN` | Narrow which contracts produce Flows |
 | `--inline-library NAME` | Recurse into a `lib/<NAME>/` dependency instead of stubbing it |
 | `--port N` | Bind a specific port |
+
+## If the first run fails
+
+SolFlow is built on [Slither](https://github.com/crytic/slither) and is contingent on it: anything Slither cannot compile and analyze, SolFlow cannot visualize. When that happens, SolFlow prints the underlying error verbatim and exits without producing anything. No partial Flows, by design: a half-compiled picture would silently mislead an audit. SolFlow never installs dependencies or modifies the target repository to make a build pass.
+
+The rule of thumb: if the project does not build on its own in that directory, SolFlow will not build it either. The two most common first-run failures are environment issues, not tool bugs:
+
+1. **solc version mismatch.** The active `solc` does not match the project's pragma. Fix: `solc-select install <version> && solc-select use <version>`.
+2. **Missing dependencies.** The target was cloned fresh and its libraries were never fetched. Fix: run the project's own setup first (`forge install`, `npm install`, or equivalent) and confirm the project's own build succeeds before pointing SolFlow at it.
+
+If the project builds cleanly and Slither itself still fails on it (this happens on some large protocols), that is an upstream Slither limitation rather than a SolFlow defect; an issue is still welcome so it can be tracked.
 
 ## Screenshots
 
@@ -83,4 +94,4 @@ ruff check
 
 ## License
 
-AGPL-3.0, and not a free choice: SolFlow builds on Slither and crytic-compile, both AGPL-3.0. If you host an instance for others, the license requires offering them the source; the index footer links back here.
+AGPL-3.0, and not a free choice: SolFlow builds on Slither and crytic-compile, both AGPL-3.0, so the combined work inherits their license. In practice this is the same license situation as Slither itself, which most auditors already run daily. SolFlow executes entirely on your machine and never transmits the code it analyzes, so using it on client or NDA work is no different from using Slither on that work. The license's network clause applies only if you host a SolFlow instance for others; in that case you must offer them the source, and the index footer links back here for exactly that purpose.
