@@ -33,6 +33,8 @@ solc-select install <version> && solc-select use <version>
 
 For the latest development version instead: `pipx install git+https://github.com/norah1499/solidity-flow-navigator`.
 
+To uninstall: `pipx uninstall solflow` removes the tool and all its bundled dependencies; SolFlow writes nothing outside its own install directory, so nothing else is left behind. `solc-select` and its downloaded compilers are a separate install, removable with `pipx uninstall solc-select`.
+
 ## Use
 
 ```bash
