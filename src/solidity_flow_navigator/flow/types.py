@@ -54,6 +54,17 @@ class FunctionNode:
     progressive renderer uses it to identify which line of the parent's
     source body to make clickable for expansion; line-level granularity is
     sufficient for the prototype.
+
+    ``call_kind`` (v0.10.4, spec §11.3) is how the parent reached this node:
+    ``"internal"`` (direct or inherited internal call, including high-level
+    self-calls re-resolved through the invoker's C3 chain), ``"library"``
+    (library call via using-for or ``Library.fn(...)``), or ``"external"``
+    (high-level call on another contract or interface that Slither bound).
+    ``None`` for the Flow root and for modifier children, which have no
+    originating call edge. Disambiguates the three reasons
+    ``declarer_contract_name`` can differ from ``invoked_via_contract_name``;
+    the renderer keys title qualification and the relation badge off it
+    (§10.2).
     """
 
     node_type: Literal["function"] = field(default="function", kw_only=True)
@@ -75,6 +86,9 @@ class FunctionNode:
     # v0.5 exploration field — see class docstring. Optional + kw_only so
     # existing test/code constructions remain valid without amendment.
     call_site_line: int | None = field(default=None, kw_only=True)
+    # v0.10.4 relation field (spec §11.3) — see class docstring. Optional +
+    # kw_only for the same construction-compatibility reason as above.
+    call_kind: str | None = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)

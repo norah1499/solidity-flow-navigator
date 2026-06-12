@@ -39,6 +39,9 @@ def test_owned_transferownership_first_child_is_only_owner_modifier(
         first.is_modifier is True
     ), f"first child {first.canonical_name} has is_modifier=False"
     assert first.name == "onlyOwner"
+    # v0.10.4: modifier children have no originating call edge → call_kind
+    # None (§11.3); the renderer must not give them a relation badge.
+    assert first.call_kind is None
 
     # And exactly one onlyOwner — defends against the dedup regression that
     # surfaced during Stage 2 probing (Slither emits modifiers via both

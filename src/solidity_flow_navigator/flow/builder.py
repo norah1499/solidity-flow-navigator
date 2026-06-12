@@ -310,6 +310,7 @@ class _FlowBuilder:
         invoked_via_super: bool,
         path: frozenset[str],
         call_site_line: int | None = None,
+        call_kind: str | None = None,
     ) -> FunctionNode:
         """Recursive node builder. Emits a terminal node (empty children) on cycle.
 
@@ -325,6 +326,10 @@ class _FlowBuilder:
         pass the originating call's first line so the progressive renderer
         can anchor an expansion affordance to it. Modifier children pass
         None (no body-call origin).
+
+        ``call_kind`` is the v0.10.4 relation field (spec §11.3); see
+        ``FunctionNode.call_kind`` docstring. Edge-handling callers pass the
+        normalized kind of the originating edge; modifier children pass None.
         """
 
         invoker_name = self._invoker_name()
@@ -333,7 +338,7 @@ class _FlowBuilder:
             # v0: implicit cycle termination per spec §11.10. Renderer can
             # spot the cycle by matching canonical_name against an ancestor.
             return self._terminal_function_node(
-                func, invoker_name, invoked_via_super, call_site_line
+                func, invoker_name, invoked_via_super, call_site_line, call_kind
             )
 
         new_path = path | {func.canonical_name}
@@ -359,6 +364,7 @@ class _FlowBuilder:
             builtins_used=builtins,
             children=children,
             call_site_line=call_site_line,
+            call_kind=call_kind,
         )
 
     def _terminal_function_node(
@@ -367,6 +373,7 @@ class _FlowBuilder:
         invoked_via: str,
         invoked_via_super: bool,
         call_site_line: int | None = None,
+        call_kind: str | None = None,
     ) -> FunctionNode:
         return FunctionNode(
             canonical_name=func.canonical_name,
@@ -385,6 +392,7 @@ class _FlowBuilder:
             builtins_used=(),
             children=(),
             call_site_line=call_site_line,
+            call_kind=call_kind,
         )
 
     def _invoker_name(self) -> str:
@@ -650,6 +658,7 @@ class _FlowBuilder:
             invoked_via_super=invoked_via_super,
             path=path,
             call_site_line=_first_line_or_none(edge.source_location.lines),
+            call_kind="library" if is_library else "internal",
         )
 
     def _handle_high_level(self, edge: CallEdge, path: frozenset[str]) -> FlowNode:
@@ -720,11 +729,17 @@ class _FlowBuilder:
             and not library_inlined(self.scope, target_path)
         ):
             return self._external_node(target, edge)
+        # v0.10.4 relation classification (spec §11.3): a high_level edge that
+        # resolved through the invoker's own C3 chain is a self-call shape
+        # (``this.X()``), not a call onto another contract — classify it
+        # "internal" so the renderer's title and badge follow the inheritance
+        # model rather than claiming an external trust boundary.
         return self._build_function_node(
             target,
             invoked_via_super=False,
             path=path,
             call_site_line=_first_line_or_none(edge.source_location.lines),
+            call_kind="internal" if is_self_call else "external",
         )
 
     def _external_node(self, target: Function, edge: CallEdge) -> ExternalNode:

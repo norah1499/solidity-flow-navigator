@@ -166,6 +166,14 @@ def test_inheritance_metadata_on_inherited_entry_points(
     assert mint.root.declarer_contract_name == "MockERC20"
     assert mint.root.invoked_via_contract_name == "MockERC20"
 
+    # v0.10.4: the Flow root has no originating call edge, so call_kind is
+    # None even when the root is an inherited entry point (§11.3).
+    inherited_root = _flow_by_entry_point(
+        solmate_flows_unfiltered, "MockERC20", "transfer(address,uint256)"
+    ).root
+    assert inherited_root.call_kind is None
+    assert mint.root.call_kind is None
+
 
 # ---------------------------------------------------------------------------
 # 3. Empty children case
@@ -2318,3 +2326,193 @@ def test_distinct_call_sites_to_same_target_preserved() -> None:
         f"expected call_site_lines [11, 13] after sort; got "
         f"{[c.call_site_line for c in children]}"  # type: ignore[union-attr]
     )
+
+
+# ---------------------------------------------------------------------------
+# v0.10.4 call_kind relation field (spec §11.3) — synthetic RepoFacts tests
+# pinning the normalized kind Layer 2 stamps on each FunctionNode child. The
+# renderer keys title qualification and the relation badge off this field
+# (§10.2), so each classification below is a rendering contract, not just a
+# data-plumbing detail.
+# ---------------------------------------------------------------------------
+
+
+def _make_library(name: str, functions: tuple):
+    """Build a one-off library contract with the given declared functions."""
+
+    from solidity_flow_navigator.analysis.types import Contract
+
+    return Contract(
+        name=name,
+        kind="library",
+        is_interface=False,
+        is_library=True,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_sl(f"src/{name}.sol"),
+        functions=functions,
+        modifiers=(),
+    )
+
+
+def _make_external_callee(name: str, declarer: str):
+    """Build an externally-visible Function we can target with a high_level
+    CallEdge. Mirrors ``_make_internal_callee`` with external visibility;
+    ``is_entry_point`` stays False so the target does not grow its own Flow."""
+
+    from solidity_flow_navigator.analysis.types import Function
+
+    return Function(
+        canonical_name=f"{declarer}.{name}()",
+        name=name,
+        full_name=f"{name}()",
+        contract_declarer_name=declarer,
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_sl(f"src/{declarer}.sol"),
+        source_code=f"function {name}() external {{}}",
+        calls=(),
+    )
+
+
+def _edge_to(kind: str, callee, *, source_location):
+    """Build a CallEdge of the given ``kind`` pointing at ``callee``."""
+
+    from solidity_flow_navigator.analysis.types import CallEdge
+
+    return CallEdge(
+        kind=kind,
+        subkind=None,
+        target_canonical_name=callee.canonical_name,
+        target_function_name=callee.name,
+        target_contract_name=callee.contract_declarer_name,
+        is_resolved=True,
+        source_location=source_location,
+    )
+
+
+def test_call_kind_internal_child_and_none_root() -> None:
+    """An internal call edge stamps call_kind='internal' on the child; the
+    Flow root carries call_kind=None (no originating call edge)."""
+
+    from solidity_flow_navigator.analysis.types import RepoFacts
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    helper = _make_internal_callee("h", "App")
+    edge = _edge_to(
+        "internal",
+        helper,
+        source_location=_sl_at("src/App.sol", start=100, length=20, lines=(5,)),
+    )
+    entry = _make_entry("entry", "App", calls=(edge,))
+    app = _make_contract("App", functions=(entry, helper))
+    facts = RepoFacts(repo_path="/abs", contracts=(app,), free_functions=())
+
+    flows = build_flows(facts, Scope())
+    assert len(flows) == 1
+    root = flows[0].root
+    assert root.call_kind is None, f"root call_kind: {root.call_kind!r}, expected None"
+    child = root.children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.call_kind == "internal"
+
+
+def test_call_kind_library_on_library_call() -> None:
+    """A kind='library' edge stamps call_kind='library' — the declarer/invoker
+    mismatch on a library child is NOT inheritance, and pre-v0.10.4 the
+    renderer mislabeled it 'inherited from {Library}' (Morpho Blue's
+    SafeTransferLib regression shape)."""
+
+    from solidity_flow_navigator.analysis.types import RepoFacts
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    lib_fn = _make_internal_callee("safeOp", "MathLib")
+    edge = _edge_to(
+        "library",
+        lib_fn,
+        source_location=_sl_at("src/App.sol", start=100, length=20, lines=(5,)),
+    )
+    entry = _make_entry("entry", "App", calls=(edge,))
+    app = _make_contract("App", functions=(entry,))
+    lib = _make_library("MathLib", functions=(lib_fn,))
+    facts = RepoFacts(repo_path="/abs", contracts=(app, lib), free_functions=())
+
+    flows = build_flows(facts, Scope())
+    assert len(flows) == 1
+    child = flows[0].root.children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.call_kind == "library"
+    assert child.declarer_contract_name == "MathLib"
+    # invoked_via stays the Flow invoker (§11.3: same value for every node);
+    # call_kind is what tells the renderer not to read the mismatch as
+    # inheritance.
+    assert child.invoked_via_contract_name == "App"
+
+
+def test_call_kind_external_on_cross_contract_high_level() -> None:
+    """A kind='high_level' edge bound to a function on ANOTHER contract stamps
+    call_kind='external' — the IOracle.price() trust-boundary shape."""
+
+    from solidity_flow_navigator.analysis.types import RepoFacts
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    price = _make_external_callee("price", "Oracle")
+    edge = _edge_to(
+        "high_level",
+        price,
+        source_location=_sl_at("src/App.sol", start=100, length=20, lines=(5,)),
+    )
+    entry = _make_entry("entry", "App", calls=(edge,))
+    app = _make_contract("App", functions=(entry,))
+    oracle = _make_contract("Oracle", functions=(price,))
+    facts = RepoFacts(repo_path="/abs", contracts=(app, oracle), free_functions=())
+
+    flows = build_flows(facts, Scope())
+    assert len(flows) == 1
+    child = flows[0].root.children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.call_kind == "external"
+    assert child.declarer_contract_name == "Oracle"
+
+
+def test_call_kind_internal_on_high_level_self_call() -> None:
+    """A kind='high_level' edge whose bound target sits on the INVOKER itself
+    (the ``this.X()`` self-call shape, §11.5 stage 3) stamps
+    call_kind='internal' — a self-call is not a call onto another contract,
+    so the renderer must not claim an external trust boundary."""
+
+    from solidity_flow_navigator.analysis.types import RepoFacts
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    pub = _make_external_callee("pub", "App")
+    edge = _edge_to(
+        "high_level",
+        pub,
+        source_location=_sl_at("src/App.sol", start=100, length=20, lines=(5,)),
+    )
+    entry = _make_entry("entry", "App", calls=(edge,))
+    app = _make_contract("App", functions=(entry, pub))
+    facts = RepoFacts(repo_path="/abs", contracts=(app,), free_functions=())
+
+    flows = build_flows(facts, Scope())
+    assert len(flows) == 1
+    child = flows[0].root.children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.call_kind == "internal"
