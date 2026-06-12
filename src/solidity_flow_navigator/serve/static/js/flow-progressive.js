@@ -719,11 +719,16 @@
     const snapshot = snapshotPositions();
     if (expanded.length > 0) {
       expanded.forEach((cid) => collapse(cid));
+      refreshExpandedLineState();
+      layoutBox = relayout(snapshot);
+      // Collapse never pans (spec §10.2 item 2).
     } else {
+      const fresh = ids.filter((cid) => !visibleIds.has(cid));
       ids.forEach((cid) => expandImplicit(cid));
+      refreshExpandedLineState();
+      layoutBox = relayout(snapshot);
+      panNewNodesIntoView(fresh);
     }
-    refreshExpandedLineState();
-    layoutBox = relayout(snapshot);
   });
 
   // Edge-click delegation lives further down, after `edgesGroup` is
@@ -740,6 +745,58 @@
       });
     });
     return snap;
+  }
+
+  // v0.10.4 minimal pan after expansion (spec §10.2 item 2). When the union
+  // rect of the newly materialized nodes is not fully inside #graph-frame,
+  // pan by the minimal translation that reveals it — animated, zoom level
+  // untouched. Without this, a child expanded near the viewport edge lands
+  // entirely off-screen with no visual feedback (Morpho Blue borrow at
+  // narrow widths in the v0.10.3 eval: child at x=761 in a 721 px frame).
+  // Clamp order gives the union's top-left priority when it is larger than
+  // the frame, so the title bar and incoming edge are what gets revealed.
+  // Relayout sets new nodes' style.left/top synchronously (the fade-in
+  // branch), so the rects are readable immediately after relayout returns.
+  function panNewNodesIntoView(newIds) {
+    if (!newIds || newIds.length === 0) return;
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    newIds.forEach((id) => {
+      const dom = domById.get(id);
+      if (!dom) return;
+      const l = parseFloat(dom.style.left) || 0;
+      const t = parseFloat(dom.style.top) || 0;
+      left = Math.min(left, l);
+      top = Math.min(top, t);
+      right = Math.max(right, l + dom.offsetWidth);
+      bottom = Math.max(bottom, t + dom.offsetHeight);
+    });
+    if (left === Infinity) return;
+
+    // Graph coords → frame viewport coords through the current transform.
+    const t = d3.zoomTransform(frame);
+    const vx0 = left * t.k + t.x;
+    const vy0 = top * t.k + t.y;
+    const vx1 = right * t.k + t.x;
+    const vy1 = bottom * t.k + t.y;
+    const fr = frame.getBoundingClientRect();
+    const pad = 16;
+
+    let dxv = 0;
+    let dyv = 0;
+    if (vx1 > fr.width - pad) dxv = fr.width - pad - vx1;
+    if (vx0 + dxv < pad) dxv = pad - vx0; // top-left wins if union > frame
+    if (vy1 > fr.height - pad) dyv = fr.height - pad - vy1;
+    if (vy0 + dyv < pad) dyv = pad - vy0;
+    if (dxv === 0 && dyv === 0) return;
+
+    // translateBy takes deltas in pre-scale coordinates.
+    frameSel
+      .transition()
+      .duration(ANIM_MS)
+      .call(zoom.translateBy, dxv / t.k, dyv / t.k);
   }
 
   // ----- edge anchoring --------------------------------------------------

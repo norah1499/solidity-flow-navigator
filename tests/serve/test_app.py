@@ -1084,6 +1084,35 @@ def test_flow_progressive_relayout_restores_opacity_on_existing_nodes(
     )
 
 
+def test_flow_progressive_pans_new_nodes_into_view(client: FlaskClient) -> None:
+    """v0.10.4 minimal pan (spec §10.2 item 2): after an expansion's
+    relayout, newly materialized nodes outside the frame are panned into
+    view — minimal translation, animated, zoom untouched; collapse never
+    pans.
+
+    pytest cannot run the JS; pin the helper, its wiring in the expand
+    branch (and only there), and the zoom-preserving primitive it uses.
+    """
+    rv = client.get("/static/js/flow-progressive.js")
+    js = rv.get_data(as_text=True)
+    assert "function panNewNodesIntoView" in js, (
+        "flow-progressive.js must define panNewNodesIntoView (v0.10.4 "
+        "minimal pan, spec §10.2 item 2)."
+    )
+    assert "panNewNodesIntoView(fresh);" in js, (
+        "the call-line click handler's EXPAND branch must invoke "
+        "panNewNodesIntoView with the freshly expanded ids."
+    )
+    assert js.count("panNewNodesIntoView(") == 2, (
+        "panNewNodesIntoView must be invoked exactly once (expand branch) "
+        "— collapse never pans (spec §10.2 item 2)."
+    )
+    assert "zoom.translateBy" in js, (
+        "the pan must use zoom.translateBy — translation only, zoom level "
+        "untouched (spec §10.2 item 2)."
+    )
+
+
 def test_flow_page_back_link_inside_header_row(
     client: FlaskClient, solmate_flows: tuple[Flow, ...]
 ) -> None:
