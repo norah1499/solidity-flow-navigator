@@ -17,6 +17,12 @@
   --node-fn-bg: #fdfcf7;
   --node-fn-border: #2c2c2c;
 
+  /* Node title bar (v0.10.4 — was hardcoded light values, which left the
+     cream bar glaring with unreadable light text in dark mode). Light:
+     slightly darker cream than the node interior + dark-ink rule (§10.2). */
+  --node-title-bg: #f1ede0;
+  --node-title-rule: #2c2c2c;
+
   /* FunctionNode (modifier) */
   --node-mod-bg: #e8f0fa;
   --node-mod-border: #3a6db0;
@@ -55,6 +61,12 @@
 
     --node-fn-bg: #1d1d1b;
     --node-fn-border: #c2c0b6;
+
+    /* Dark: slightly LIGHTER than the node interior (the inverse of the
+       light mode's slightly-darker-cream), light-ink rule matching the
+       node border weight. */
+    --node-title-bg: #2a2a25;
+    --node-title-rule: #c2c0b6;
 
     --node-mod-bg: #1a2433;
     --node-mod-border: #6b94c8;
@@ -625,8 +637,8 @@ body.flow-page .flow-header {
 .node-title-bar {
   margin: -0.75rem -1rem 0 -1rem;
   padding: 0.4rem 1rem;
-  background: #f1ede0;
-  border-bottom: 0.5px solid #2c2c2c;
+  background: var(--node-title-bg);
+  border-bottom: 0.5px solid var(--node-title-rule);
   font-family: var(--font-mono);
   font-size: 12px;
 }

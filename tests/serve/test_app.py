@@ -1174,6 +1174,28 @@ def test_index_badges_carry_tooltips(client: FlaskClient) -> None:
         ), "meta-unresolved badges must carry a title tooltip (v0.10.4)."
 
 
+def test_node_title_bar_uses_palette_tokens(client: FlaskClient) -> None:
+    """v0.10.4: .node-title-bar must use --node-title-bg / --node-title-rule
+    (defined in BOTH palettes) instead of hardcoded light-mode values —
+    the hardcoded cream bar rendered with unreadable light text in dark
+    mode (pre-existing since v0.7.0)."""
+    css = client.get("/static/css/main.css").get_data(as_text=True)
+    assert "background: var(--node-title-bg)" in css, (
+        ".node-title-bar background must come from --node-title-bg "
+        "(v0.10.4 dark-mode fix)."
+    )
+    assert (
+        "border-bottom: 0.5px solid var(--node-title-rule)" in css
+    ), ".node-title-bar rule must come from --node-title-rule (v0.10.4)."
+    assert css.count("--node-title-bg:") == 2, (
+        "--node-title-bg must be defined in both the light :root and the "
+        "dark prefers-color-scheme blocks."
+    )
+    assert (
+        css.count("--node-title-rule:") == 2
+    ), "--node-title-rule must be defined in both palettes."
+
+
 def test_flow_page_back_link_inside_header_row(
     client: FlaskClient, solmate_flows: tuple[Flow, ...]
 ) -> None:
