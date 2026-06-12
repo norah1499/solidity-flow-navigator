@@ -7,21 +7,26 @@
 {% endblock %}
 
 {% block content %}
-<nav class="flow-nav">
-  <a class="back-link" href="{{ url_for('index') }}">&larr; index</a>
-</nav>
+{# v0.10.4: the back-link lives INSIDE the header's flex row. It was
+   previously a position:fixed overlay at the header's coordinates, which
+   sat on top of the title's first characters on every flow page. #}
 <header class="flow-header">
-  <h1 class="flow-title">
-    <code>{{ flow.entry_point_contract_name }}.{{ flow.entry_point_function_name }}{{ flow.signature_suffix }}</code>
-  </h1>
-  {% set root = flow.root %}
-  {% if root.invoked_via_contract_name != root.declarer_contract_name %}
-    <p class="flow-subtitle">
-      Inherited entry point — invoked on
-      <code>{{ root.invoked_via_contract_name }}</code>,
-      declared in <code>{{ root.declarer_contract_name }}</code>.
-    </p>
-  {% endif %}
+  <nav class="flow-nav">
+    <a class="back-link" href="{{ url_for('index') }}">&larr; index</a>
+  </nav>
+  <div class="flow-header-text">
+    <h1 class="flow-title">
+      <code>{{ flow.entry_point_contract_name }}.{{ flow.entry_point_function_name }}{{ flow.signature_suffix }}</code>
+    </h1>
+    {% set root = flow.root %}
+    {% if root.invoked_via_contract_name != root.declarer_contract_name %}
+      <p class="flow-subtitle">
+        Inherited entry point — invoked on
+        <code>{{ root.invoked_via_contract_name }}</code>,
+        declared in <code>{{ root.declarer_contract_name }}</code>.
+      </p>
+    {% endif %}
+  </div>
 </header>
 
 {# Stage 3 graph layout. Flow data is embedded inline; flow.js builds the

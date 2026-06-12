@@ -330,20 +330,17 @@ code, pre { font-family: var(--font-mono); }
 
 /* ----- flow page (Stage 1 placeholder) ----------------------------------- */
 
-/* v0.6: `.flow-nav` is viewport-fixed (top-left) so the `← index` button
-   stays visible regardless of canvas pan/zoom state. Previously it sat in
-   document flow at the top of `.site-main`; on wide canvases (notably Aave
-   V3 `Pool.executeLiquidationCall`) horizontal scroll moved it off-screen,
-   leaving the auditor stranded without a back affordance. Position is
-   below `.site-header` (~3rem tall) with a small inset so it doesn't
-   collide with the page chrome above. z-index sits above `#graph` so it
-   floats over any node that happens to land in that corner. */
+/* v0.10.4: `.flow-nav` sits in normal flow as the first item of the
+   `.flow-header` flex row. It was viewport-fixed from v0.6 (the document
+   used to scroll horizontally on wide canvases, which moved an in-flow
+   button off-screen), but v0.10.0 locked the flow page to the viewport
+   (`body.flow-page { height: 100vh; overflow: hidden }`) — panning is
+   d3-zoom inside #graph-frame and the document never scrolls, so the
+   fixed overlay's only remaining effect was sitting ON TOP of the
+   title's first characters on every flow page. */
 .flow-nav {
-  position: fixed;
-  top: 3.5rem;
-  left: 1rem;
-  z-index: 10;
   margin: 0;
+  flex: 0 0 auto;
 }
 .back-link {
   font-size: 12px;
@@ -360,13 +357,23 @@ code, pre { font-family: var(--font-mono); }
   border-color: var(--border-strong);
 }
 
-.flow-header { margin: 0 0 1.5rem; }
+.flow-header {
+  margin: 0 0 1.5rem;
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+}
+.flow-header-text { min-width: 0; }
 .flow-title {
   font-size: 16px;
   font-weight: 500;
   margin: 0;
 }
-.flow-title code { font-size: 14px; }
+.flow-title code {
+  font-size: 14px;
+  /* long unbroken signatures (no spaces) must wrap, not overflow */
+  overflow-wrap: anywhere;
+}
 
 .flow-subtitle {
   margin: 0.25rem 0 0;

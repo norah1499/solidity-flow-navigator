@@ -11,7 +11,9 @@
 </head>
 <body class="{% block body_class %}{% endblock %}">
   <header class="site-header">
-    <a class="site-title" href="{{ url_for('index') }}">Solidity Flow Navigator</a>
+    {# v0.10.4: header brand is the CLI name; browser <title> tags keep the
+       full "Solidity Flow Navigator" name (header-only branding decision). #}
+    <a class="site-title" href="{{ url_for('index') }}">solflow</a>
     <span class="site-repo">{{ repo_path }}</span>
   </header>
   <main class="site-main">

@@ -1082,3 +1082,52 @@ def test_flow_progressive_relayout_restores_opacity_on_existing_nodes(
         '.style("opacity", "1") — without it, an interrupted entrance fade '
         "leaves the node frozen below full opacity forever (v0.10.4 fix)."
     )
+
+
+def test_flow_page_back_link_inside_header_row(
+    client: FlaskClient, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """v0.10.4 overlap fix: the back-link renders INSIDE .flow-header (flex
+    row), and .flow-nav is no longer a position:fixed overlay.
+
+    The fixed overlay sat on top of the flow title's first characters on
+    every flow page (visible even in the README screenshots), hiding the
+    contract name. The flow page never scrolls since v0.10.0 (viewport
+    lock + d3-zoom pan), so the v0.6 motivation for fixing it is gone.
+    """
+    url_id = urllib.parse.quote(solmate_flows[0].entry_point_invoker_canonical_name)
+    rv = client.get(f"/flow/{url_id}")
+    body = rv.get_data(as_text=True)
+    header_start = body.find('<header class="flow-header">')
+    header_end = body.find("</header>", header_start)
+    assert header_start != -1, "flow-header missing from flow page"
+    header = body[header_start:header_end]
+    assert 'class="back-link"' in header, (
+        "the ← index back-link must render inside .flow-header so it "
+        "occupies the title row instead of overlaying the title (v0.10.4)."
+    )
+
+    css = client.get("/static/css/main.css").get_data(as_text=True)
+    nav_block_start = css.find(".flow-nav {")
+    nav_block_end = css.find("}", nav_block_start)
+    nav_block = css[nav_block_start:nav_block_end]
+    assert "position: fixed" not in nav_block, (
+        ".flow-nav must not be position:fixed — the overlay occluded the "
+        "flow title's first characters (v0.10.4 overlap fix)."
+    )
+
+
+def test_site_header_brand_is_solflow_title_tag_keeps_full_name(
+    client: FlaskClient,
+) -> None:
+    """v0.10.4 branding: the site-header brand anchor reads 'solflow' (the
+    CLI name); browser <title> tags keep 'Solidity Flow Navigator'
+    (header-only branding decision)."""
+    body = client.get("/").get_data(as_text=True)
+    assert re.search(r'<a class="site-title"[^>]*>solflow</a>', body), (
+        "site-header brand must read 'solflow' (v0.10.4 header-only " "branding)."
+    )
+    assert "<title>Index — Solidity Flow Navigator</title>" in body, (
+        "browser <title> must keep the full project name — the brand "
+        "change is header-only."
+    )
