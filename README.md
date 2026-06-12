@@ -6,7 +6,7 @@
 
 SolFlow compiles a Solidity repository, extracts call-graph facts with [Slither](https://github.com/crytic/slither), and serves one interactive call-flow visualization per external entry point. Every panel shows the function's real source. Built for smart contract auditing.
 
-![SolFlow navigating Morpho Blue: the entry-point index, the fully expanded liquidate flow, and the same flow zoomed to source level](docs/demo.gif)
+![SolFlow navigating Morpho Blue: the entry-point index, the fully expanded liquidate flow, and the same flow zoomed to source level](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/demo.gif)
 
 *SolFlow on [Morpho Blue](https://github.com/morpho-org/morpho-blue): the entry-point index, the fully expanded `liquidate` flow, and the same flow zoomed to source level. Pausable stills are under [Screenshots](#screenshots).*
 
@@ -59,13 +59,13 @@ Useful flags (run `solflow --help` for the full reference, grouped into **Scope*
 
 The index lists every external entry point of the analyzed repository:
 
-![Index view listing the entry points of Morpho Blue](docs/index-morpho.png)
+![Index view listing the entry points of Morpho Blue](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/index-morpho.png)
 
 Opening an entry point renders its full call flow; every callee panel shows the real source:
 
-![Expanded call-flow graph of Morpho.liquidate](docs/flow-liquidate-overview.png)
+![Expanded call-flow graph of Morpho.liquidate](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/flow-liquidate-overview.png)
 
-![Zoomed view of the liquidate flow with inherited library functions](docs/flow-liquidate-detail.png)
+![Zoomed view of the liquidate flow with inherited library functions](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/flow-liquidate-detail.png)
 
 </details>
 
