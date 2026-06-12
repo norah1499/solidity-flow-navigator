@@ -29,7 +29,7 @@ from markupsafe import Markup
 
 from ..analysis.types import RepoFacts
 from ..flow.scope import DEFAULT_SCOPE, Scope
-from ..flow.types import Flow
+from ..flow.types import Flow, FunctionNode
 from .highlight import highlight_signature, write_pygments_css
 from .serializer import serialize_flow
 
@@ -95,6 +95,12 @@ class _EntryPointEntry:
     # template renders ``dN`` unconditionally.
     unresolved_count: int
     max_depth: int
+    # v0.11.0 per-entry modifier chips (spec §8.3): names of the Flow root's
+    # modifier children, in application order. Populated for every entry;
+    # the template renders chips on Mutating rows only (the deliberate
+    # asymmetry recorded in §8.3 — no chips on a mutating row IS the
+    # unprotected-entry-point signal).
+    modifier_names: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +198,7 @@ def build_index(
                     signature_html=sig_html,
                     unresolved_count=flow.unresolved_count,
                     max_depth=flow.max_depth,
+                    modifier_names=_root_modifier_names(flow),
                 )
                 if is_read_only:
                     read_only.append(ep)
@@ -212,6 +219,21 @@ def build_index(
         groups.append(_GroupEntry(label=label, contracts=tuple(contracts)))
 
     return tuple(groups), total, contract_count, total_unresolved
+
+
+def _root_modifier_names(flow: Flow) -> tuple[str, ...]:
+    """Names of the Flow root's modifier children, in application order.
+
+    Modifier children are the leading FunctionNode children with
+    ``is_modifier=True`` (§11.6 folds them in before body-call children).
+    Unresolved modifiers (``ABSTRACT_NO_IMPLEMENTATION``) have no resolved
+    name and are skipped — the Flow page itself shows the unresolved pill.
+    """
+    return tuple(
+        c.name
+        for c in flow.root.children
+        if isinstance(c, FunctionNode) and c.is_modifier
+    )
 
 
 def _signature_suffix(flow: Flow) -> str:

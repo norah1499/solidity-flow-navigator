@@ -8,14 +8,16 @@
     <h1 class="index-title">Index</h1>
     {# v0.10.4: native title tooltips on the stats and per-entry badges —
        the d{N} / "N unr" shorthand was unexplained anywhere in the UI. #}
+    {# v0.11.0: labels pluralize with their counts; the repo-path subtitle
+       that duplicated the site header's path is gone (spec §8.3). #}
     <ul class="index-counts">
       <li class="count-item" title="contracts with at least one externally callable entry point">
         <span class="count-value">{{ total_contracts }}</span>
-        <span class="count-label">contracts</span>
+        <span class="count-label">contract{{ 's' if total_contracts != 1 }}</span>
       </li>
       <li class="count-item" title="externally callable functions — one Flow page each">
         <span class="count-value">{{ total_entry_points }}</span>
-        <span class="count-label">entry points</span>
+        <span class="count-label">entry point{{ 's' if total_entry_points != 1 }}</span>
       </li>
       <li class="count-item" title="call sites no Flow could resolve to a function body (low-level calls, unbound interface calls)">
         <span class="count-value">{{ total_unresolved }}</span>
@@ -23,7 +25,6 @@
       </li>
     </ul>
   </div>
-  <p class="index-subtitle">{{ repo_path }}</p>
 </header>
 
 <p class="index-scope">
@@ -60,9 +61,17 @@
         <ul class="entry-list">
           {% for ep in contract.mutating_entry_points %}
           <li class="entry-row">
-            <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
-              <code class="src">{{ ep.contract_name }}.{{ ep.signature_html | safe }}</code>
-            </a>
+            {# v0.11.0 (spec §8.3): no Contract. prefix — the block heading
+               names the contract; modifier chips render on mutating rows
+               only (no chips = unprotected mutating entry point). #}
+            <span class="entry-main">
+              <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
+                <code class="src">{{ ep.signature_html | safe }}</code>
+              </a>
+              {%- for m in ep.modifier_names %}
+              <span class="badge badge-modifier entry-mod-chip" title="modifier {{ m }} guards this entry point">{{ m }}</span>
+              {%- endfor %}
+            </span>
             <span class="entry-meta">
               {%- if ep.unresolved_count > 0 -%}
                 <span class="meta-unresolved" title="{{ ep.unresolved_count }} unresolved call site(s) in this flow — rendered as red pills">{{ ep.unresolved_count }} unr</span>
@@ -81,9 +90,13 @@
         <ul class="entry-list">
           {% for ep in contract.read_only_entry_points %}
           <li class="entry-row">
-            <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
-              <code class="src">{{ ep.contract_name }}.{{ ep.signature_html | safe }}</code>
-            </a>
+            {# v0.11.0: read-only rows carry no modifier chips (deliberate
+               asymmetry, spec §8.3) but share the entry-main wrapper. #}
+            <span class="entry-main">
+              <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
+                <code class="src">{{ ep.signature_html | safe }}</code>
+              </a>
+            </span>
             <span class="entry-meta">
               {%- if ep.unresolved_count > 0 -%}
                 <span class="meta-unresolved" title="{{ ep.unresolved_count }} unresolved call site(s) in this flow — rendered as red pills">{{ ep.unresolved_count }} unr</span>

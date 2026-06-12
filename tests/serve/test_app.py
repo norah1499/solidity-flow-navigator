@@ -431,6 +431,136 @@ def test_index_header_renders_three_counts(client: FlaskClient) -> None:
     assert '<span class="count-label">unresolved</span>' in body
 
 
+def test_index_drops_repo_path_subtitle_and_contract_prefix(
+    client: FlaskClient,
+) -> None:
+    """v0.11.0 (spec §8.3): the repo path renders once (site header chrome) —
+    the index-local subtitle is gone — and entry rows drop the `Contract.`
+    prefix (the contract block heading already names the contract)."""
+    body = client.get("/").get_data(as_text=True)
+    assert 'class="index-subtitle"' not in body, (
+        "the index-local repo-path subtitle must be gone (v0.11.0 — it "
+        "duplicated the site header's path)."
+    )
+    # The declaration-form signature now starts the link content directly:
+    # `<code class="src">function transfer(...)`, never `Owned.function ...`.
+    assert (
+        re.search(r'<code class="src">\s*Owned\.', body) is None
+    ), "entry rows must not carry the Contract. prefix (v0.11.0 §8.3)."
+    assert "function transferOwnership" in re.sub(r"<[^>]+>", "", body), (
+        "declaration-form signatures must still render after the prefix " "removal."
+    )
+
+
+def test_index_singular_count_labels() -> None:
+    """v0.11.0: count labels pluralize with their values — a one-contract,
+    one-entry-point repo reads '1 contract · 1 entry point', not
+    '1 contracts'. Built from a minimal synthetic repo so the singular
+    branch is actually exercised (the Solmate fixture is always plural)."""
+    from solidity_flow_navigator.analysis.types import (
+        Contract,
+        Function,
+        SourceLocation,
+    )
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    sl = SourceLocation(
+        filename_absolute="/abs/src/App.sol",
+        filename_relative="src/App.sol",
+        start=0,
+        length=1,
+        lines=(1,),
+        starting_column=1,
+        ending_column=2,
+    )
+    entry = Function(
+        canonical_name="App.go()",
+        name="go",
+        full_name="go()",
+        contract_declarer_name="App",
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=True,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=sl,
+        source_code="function go() external {}",
+        calls=(),
+    )
+    app_contract = Contract(
+        name="App",
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=sl,
+        functions=(entry,),
+        modifiers=(),
+    )
+    facts = RepoFacts(repo_path="/abs", contracts=(app_contract,), free_functions=())
+    flows = build_flows(facts, Scope())
+    assert len(flows) == 1
+    app = create_app(facts, flows)
+    app.config.update(TESTING=True)
+    body = app.test_client().get("/").get_data(as_text=True)
+    assert (
+        '<span class="count-label">contract</span>' in body
+    ), "singular count must read 'contract' (v0.11.0 pluralization)."
+    assert (
+        '<span class="count-label">entry point</span>' in body
+    ), "singular count must read 'entry point' (v0.11.0 pluralization)."
+    assert "1 contracts" not in body and "1 entry points" not in body
+
+
+def test_index_modifier_chips_on_mutating_rows_only(client: FlaskClient) -> None:
+    """v0.11.0 (spec §8.3): mutating rows render one chip per root modifier
+    (Owned.transferOwnership → onlyOwner); read-only sections render no
+    chips — the deliberate asymmetry where a chipless mutating row IS the
+    unprotected-entry-point signal."""
+    body = client.get("/").get_data(as_text=True)
+    owned_block = _extract_contract_block(body, "Owned")
+    assert "entry-mod-chip" in owned_block, (
+        "Owned's mutating rows must carry modifier chips (transferOwnership "
+        "has onlyOwner)."
+    )
+    assert (
+        ">onlyOwner</span>" in owned_block
+    ), "the onlyOwner chip must carry the modifier's name."
+    # No chips inside any Read-only section, anywhere on the page.
+    for section_start in [m.start() for m in re.finditer(r">Read-only · ", body)]:
+        section_end = body.find("</section>", section_start)
+        assert "entry-mod-chip" not in body[section_start:section_end], (
+            "read-only rows must not render modifier chips (v0.11.0 §8.3 "
+            "deliberate asymmetry)."
+        )
+
+
+def test_main_css_unresolved_badge_is_chip(client: FlaskClient) -> None:
+    """v0.11.0: `N unr` renders as a chip (fill + border in the
+    --node-unresolved-* family), not bare colored text."""
+    css = client.get("/static/css/main.css").get_data(as_text=True)
+    start = css.find(".meta-unresolved {")
+    block = css[start : css.find("}", start)]
+    assert (
+        "background: var(--node-unresolved-bg)" in block
+    ), "meta-unresolved must carry the unresolved family fill (v0.11.0)."
+    assert (
+        "border: 0.5px solid var(--node-unresolved-border)" in block
+    ), "meta-unresolved must carry the unresolved family border (v0.11.0)."
+
+
 def test_index_header_counts_match_build_index_totals(
     client: FlaskClient,
     solmate_facts: RepoFacts,

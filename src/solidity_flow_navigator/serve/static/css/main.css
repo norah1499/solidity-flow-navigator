@@ -175,12 +175,8 @@ code, pre { font-family: var(--font-mono); }
   color: var(--fg-muted);
 }
 
-.index-subtitle {
-  margin: 0.25rem 0 0;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--fg-muted);
-}
+/* v0.11.0: the .index-subtitle rule is gone with the duplicated repo-path
+   subtitle (spec §8.3) — the path renders once, in the site header. */
 
 /* v0.8.0 scope summary line: prefix + excluded globs + stub-paths section,
    chrome (Scope, separators, section labels) in --fg-muted; glob values
@@ -277,6 +273,23 @@ code, pre { font-family: var(--font-mono); }
   color: var(--fg-text);
 }
 
+/* v0.11.0: left-side group holding the signature link plus any modifier
+   chips, so .entry-row's space-between keeps the metadata column pinned
+   right with chips sitting immediately after the signature. */
+.entry-main {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+/* v0.11.0 modifier chips (spec §8.3): reuse the flow-page badge family
+   (.badge.badge-modifier provides the fill); this class only sizes the
+   chip for the index row context. */
+.entry-mod-chip {
+  flex-shrink: 0;
+}
+
 /* v0.8.0 per-entry metadata column. `N unr` carries the same red used by
    UnresolvedNode borders on Flow pages (--node-unresolved-border), so the
    visual cue rhymes between the index and the source body it points at.
@@ -291,8 +304,16 @@ code, pre { font-family: var(--font-mono); }
   gap: 0.3rem;
 }
 
+/* v0.11.0: `N unr` is a chip, not bare colored text — the unresolved count
+   is where the tool is blind, which is the first thing an auditor triages;
+   the fill + border make it scannable at a glance. Palette stays in the
+   --node-unresolved-* family (both modes defined), per §8.3. */
 .meta-unresolved {
   color: var(--node-unresolved-border);
+  background: var(--node-unresolved-bg);
+  border: 0.5px solid var(--node-unresolved-border);
+  border-radius: 2px;
+  padding: 0.05rem 0.3rem;
 }
 
 .meta-depth,
