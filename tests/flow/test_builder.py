@@ -2464,6 +2464,40 @@ def test_call_kind_library_on_library_call() -> None:
     assert child.invoked_via_contract_name == "App"
 
 
+def test_call_kind_library_on_intra_library_internal_call() -> None:
+    """An edge Slither reports as kind='internal' whose RESOLVED TARGET is
+    declared on a library still stamps call_kind='library' (v0.11.0 §11.3
+    widening) — the MathLib.wMulDown→mulDivDown shape. Without this, the
+    deep node rendered 'Morpho.mulDivDown — inherited from MathLib', which
+    is never true (contracts cannot inherit from libraries)."""
+
+    from solidity_flow_navigator.analysis.types import RepoFacts
+    from solidity_flow_navigator.flow.builder import build_flows
+    from solidity_flow_navigator.flow.scope import Scope
+
+    lib_fn = _make_internal_callee("mulDivDown", "MathLib")
+    # The call site is an ordinary internal jump (Slither kind="internal"),
+    # but the target lives on a library.
+    edge = _edge_to(
+        "internal",
+        lib_fn,
+        source_location=_sl_at("src/App.sol", start=100, length=20, lines=(5,)),
+    )
+    entry = _make_entry("entry", "App", calls=(edge,))
+    app = _make_contract("App", functions=(entry,))
+    lib = _make_library("MathLib", functions=(lib_fn,))
+    facts = RepoFacts(repo_path="/abs", contracts=(app, lib), free_functions=())
+
+    flows = build_flows(facts, Scope())
+    assert len(flows) == 1
+    child = flows[0].root.children[0]
+    assert isinstance(child, FunctionNode)
+    assert child.call_kind == "library", (
+        f"target declared on a library must classify 'library' even via an "
+        f"internal edge; got {child.call_kind!r}"
+    )
+
+
 def test_call_kind_external_on_cross_contract_high_level() -> None:
     """A kind='high_level' edge bound to a function on ANOTHER contract stamps
     call_kind='external' — the IOracle.price() trust-boundary shape."""

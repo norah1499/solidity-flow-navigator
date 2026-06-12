@@ -58,8 +58,11 @@ class FunctionNode:
     ``call_kind`` (v0.10.4, spec §11.3) is how the parent reached this node:
     ``"internal"`` (direct or inherited internal call, including high-level
     self-calls re-resolved through the invoker's C3 chain), ``"library"``
-    (library call via using-for or ``Library.fn(...)``), or ``"external"``
-    (high-level call on another contract or interface that Slither bound).
+    (any call whose resolved target is declared on a library — using-for
+    calls, ``Library.fn(...)`` calls, and intra-library internal calls,
+    which Slither reports as ``kind="internal"`` but which cross the same
+    contract→library boundary), or ``"external"`` (high-level call on
+    another contract or interface that Slither bound).
     ``None`` for the Flow root and for modifier children, which have no
     originating call edge. Disambiguates the three reasons
     ``declarer_contract_name`` can differ from ``invoked_via_contract_name``;

@@ -653,12 +653,21 @@ class _FlowBuilder:
         ):
             return self._external_node(target, edge)
 
+        # v0.11.0 relation classification widening (spec §11.3): a function
+        # DECLARED on a library is a library node regardless of how the call
+        # site reached it. Intra-library calls (MathLib.wMulDown's body
+        # calling mulDivDown) arrive from Slither as kind="internal"; without
+        # this check they fell into the inherited-badge branch and rendered
+        # as "Morpho.mulDivDown — inherited from MathLib", which is never
+        # true (contracts cannot inherit from libraries).
+        target_declarer = self._contracts_by_name.get(target.contract_declarer_name)
+        target_on_library = target_declarer is not None and target_declarer.is_library
         return self._build_function_node(
             target,
             invoked_via_super=invoked_via_super,
             path=path,
             call_site_line=_first_line_or_none(edge.source_location.lines),
-            call_kind="library" if is_library else "internal",
+            call_kind="library" if (is_library or target_on_library) else "internal",
         )
 
     def _handle_high_level(self, edge: CallEdge, path: frozenset[str]) -> FlowNode:
