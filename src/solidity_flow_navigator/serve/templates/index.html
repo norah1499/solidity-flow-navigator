@@ -45,6 +45,22 @@
   {%- endif %}
 </p>
 
+{# v0.12.0 (spec §8.3): chips legend — each key renders through the SAME
+   classes as the live chips so the legend stays self-verifying. Renders
+   unconditionally to keep page layout stable across targets. #}
+<p class="index-legend">
+  <span class="scope-chrome">Legend</span>
+  <span class="scope-chrome">·</span>
+  <span class="badge badge-modifier entry-mod-chip">modifier</span>
+  <span class="scope-chrome">gate on a mutating entry, none = unguarded</span>
+  <span class="scope-chrome">·</span>
+  <span class="meta-unresolved">2 unr</span>
+  <span class="scope-chrome">unresolved call sites</span>
+  <span class="scope-chrome">·</span>
+  <span class="meta-depth">d3</span>
+  <span class="scope-chrome">max call depth</span>
+</p>
+
 {% for group in groups %}
   {% if group.contracts %}
   <section class="index-group">

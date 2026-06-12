@@ -641,6 +641,33 @@ def test_index_scope_line_renders_none_when_no_stubs(
     assert '<span class="scope-none">none</span>' in body
 
 
+def test_index_renders_chips_legend_below_scope_line(client: FlaskClient) -> None:
+    """v0.12.0 (spec §8.3): a ``Legend`` chrome line renders directly below
+    the scope summary, unconditionally, with each key rendered through the
+    SAME classes as the live chips (badge-modifier / meta-unresolved /
+    meta-depth) so the legend stays self-verifying against the rows."""
+    rv = client.get("/")
+    assert rv.status_code == 200
+    body = rv.get_data(as_text=True)
+
+    assert 'class="index-legend"' in body
+    legend = body.split('class="index-legend"', 1)[1].split("</p>", 1)[0]
+
+    # Literal "Legend" prefix in muted chrome.
+    assert '<span class="scope-chrome">Legend</span>' in legend
+    # The three keys, each in its live chip class with its sample text.
+    assert "badge badge-modifier" in legend
+    assert ">modifier</span>" in legend
+    assert '<span class="meta-unresolved">2 unr</span>' in legend
+    assert '<span class="meta-depth">d3</span>' in legend
+    # The three glosses.
+    assert "gate on a mutating entry, none = unguarded" in legend
+    assert "unresolved call sites" in legend
+    assert "max call depth" in legend
+    # Position: legend follows the scope summary line.
+    assert body.index('class="index-scope"') < body.index('class="index-legend"')
+
+
 def test_index_section_count_suffix_matches_entry_count(
     client: FlaskClient,
     solmate_facts: RepoFacts,
