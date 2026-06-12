@@ -8,7 +8,7 @@ SolFlow compiles a Solidity repository, extracts call-graph facts with [Slither]
 
 ![SolFlow navigating Morpho Blue: the entry-point index, the fully expanded liquidate flow, and the same flow zoomed to source level](docs/demo.gif)
 
-*SolFlow on [Morpho Blue](https://github.com/morpho-org/morpho-blue): the entry-point index, the fully expanded `liquidate` flow, and the same flow zoomed to source level.*
+*SolFlow on [Morpho Blue](https://github.com/morpho-org/morpho-blue): the entry-point index, the fully expanded `liquidate` flow, and the same flow zoomed to source level. Pausable stills are under [Screenshots](#screenshots).*
 
 ## Why
 
@@ -38,6 +38,8 @@ solflow path/to/your/solidity/project
 ```
 
 Point it at the repository root, where Slither can resolve dependencies. SolFlow compiles the project, binds `127.0.0.1:8080` (or the next free port), and prints the URL.
+
+Compilation goes through [crytic-compile](https://github.com/crytic/crytic-compile), so any build system it detects should work (Foundry, Hardhat, Truffle, Brownie, plain solc); Foundry projects are what SolFlow is tested against. If compilation fails, SolFlow prints the compiler error verbatim and exits without producing anything. No partial Flows, by design: a half-compiled picture would silently mislead. The usual fix is matching the project's pragma with `solc-select use <version>`.
 
 Useful flags (run `solflow --help` for the full reference, grouped into **Scope**, **Resolution**, **Rendering**, and **Server**):
 
