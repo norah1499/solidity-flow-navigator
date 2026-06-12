@@ -1054,3 +1054,31 @@ def test_main_css_styles_relation_badges(client: FlaskClient) -> None:
     assert (
         ".badge-library" in css
     ), "main.css must style .badge-library (v0.10.4 relation badges)."
+
+
+def test_flow_progressive_relayout_restores_opacity_on_existing_nodes(
+    client: FlaskClient,
+) -> None:
+    """v0.10.4 stuck-fade fix: relayout's existing-node branch must
+    transition opacity back to 1, not only left/top.
+
+    The existing-node branch calls .interrupt(), which kills any in-flight
+    entrance fade from a previous relayout. Before the fix, two expansions
+    within ANIM_MS of each other froze the first child at its mid-fade
+    opacity forever (reproduced at 150 ms click spacing on Morpho Blue
+    withdraw during the v0.10.3 eval) — the graph drew edges pointing at
+    invisible nodes. pytest cannot run the JS; pin the transition shape:
+    the position transition must also restore opacity.
+    """
+    rv = client.get("/static/js/flow-progressive.js")
+    js = rv.get_data(as_text=True)
+    expected = (
+        '.style("left", targetLeft + "px")\n'
+        '          .style("top", targetTop + "px")\n'
+        '          .style("opacity", "1");'
+    )
+    assert expected in js, (
+        "relayout's existing-node (old-position) transition must include "
+        '.style("opacity", "1") — without it, an interrupted entrance fade '
+        "leaves the node frozen below full opacity forever (v0.10.4 fix)."
+    )

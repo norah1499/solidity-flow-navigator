@@ -1366,12 +1366,19 @@
 
       const old = oldPositions ? oldPositions.get(id) : null;
       if (old) {
+        // v0.10.4: transition opacity to 1 alongside position. The
+        // .interrupt() here kills any in-flight entrance fade from a
+        // previous relayout; before this fix, a node whose fade was
+        // interrupted (two expansions within ANIM_MS of each other)
+        // froze at its mid-fade opacity forever — visible as edges
+        // pointing at invisible nodes (Morpho liquidate, v0.10.3 eval).
         d3.select(dom)
           .interrupt()
           .transition()
           .duration(ANIM_MS)
           .style("left", targetLeft + "px")
-          .style("top", targetTop + "px");
+          .style("top", targetTop + "px")
+          .style("opacity", "1");
       } else {
         dom.style.left = targetLeft + "px";
         dom.style.top = targetTop + "px";
