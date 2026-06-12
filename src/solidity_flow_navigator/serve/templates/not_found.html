@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}404 — Solidity Flow Navigator{% endblock %}
+{% block body_class %}error-page{% endblock %}
+
+{% block content %}
+{# v0.10.4: minimal styled 404 in the tool's own chrome (the Flask default
+   error page is bare HTML with none of the site header). Typical arrival
+   path: a stale or hand-edited /flow/<url_id> after a re-run changed the
+   entry-point set. #}
+<section class="error-block">
+  <h1 class="error-title">404</h1>
+  <p class="error-text">No Flow at this path.</p>
+  <p class="error-text"><a class="back-link" href="{{ url_for('index') }}">&larr; index</a></p>
+</section>
+{% endblock %}

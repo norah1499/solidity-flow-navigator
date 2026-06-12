@@ -575,13 +575,21 @@ def test_index_per_entry_metadata_renders_in_all_four_cases(
                 ("read-only", contract.read_only_entry_points),
             ):
                 for ep in entries:
-                    depth_tag = f'<span class="meta-depth">d{ep.max_depth}</span>'
+                    # v0.10.4: badges carry a title tooltip between the class
+                    # and the closing bracket — match through it.
+                    depth_tag = (
+                        f'<span class="meta-depth" '
+                        f'title="max call depth {ep.max_depth}">'
+                        f"d{ep.max_depth}</span>"
+                    )
                     assert (
                         depth_tag in body
                     ), f"depth tag {depth_tag!r} missing for {ep.url_id}"
                     if ep.unresolved_count > 0:
                         unr_tag = (
-                            f'<span class="meta-unresolved">'
+                            f'<span class="meta-unresolved" '
+                            f'title="{ep.unresolved_count} unresolved call '
+                            f'site(s) in this flow — rendered as red pills">'
                             f"{ep.unresolved_count} unr</span>"
                         )
                         assert (
@@ -805,8 +813,24 @@ def test_flow_page_routes_colliding_canonicals_distinctly(
 
 
 def test_flow_page_unknown_returns_404(client: FlaskClient) -> None:
+    """Unknown flow ids 404 — and since v0.10.4 the body is the tool's own
+    styled error page (site header + back-link), not Flask's bare default."""
     rv = client.get("/flow/Bogus.nonexistent(uint256)")
     assert rv.status_code == 404
+    body = rv.get_data(as_text=True)
+    assert 'class="site-header"' in body, (
+        "404 page must render in the tool's chrome (base.html), not "
+        "Flask's bare default (v0.10.4)."
+    )
+    assert "No Flow at this path." in body
+    assert 'class="back-link"' in body, "404 page must offer a way back to the index"
+
+
+def test_unknown_top_level_path_uses_styled_404(client: FlaskClient) -> None:
+    """The errorhandler covers ALL 404s, not just /flow/ misses."""
+    rv = client.get("/definitely-not-a-route")
+    assert rv.status_code == 404
+    assert "No Flow at this path." in rv.get_data(as_text=True)
 
 
 # -- static assets ----------------------------------------------------------
@@ -1111,6 +1135,43 @@ def test_flow_progressive_pans_new_nodes_into_view(client: FlaskClient) -> None:
         "the pan must use zoom.translateBy — translation only, zoom level "
         "untouched (spec §10.2 item 2)."
     )
+
+
+def test_flow_progressive_dedups_builtins_strip(client: FlaskClient) -> None:
+    """v0.10.4 builtins display (spec §11.7): the strip shows each builtin
+    once with an occurrence count ('require(bool,string) × 6') instead of
+    verbatim repeats. The underlying tuple keeps order and duplicates —
+    display-only change."""
+    rv = client.get("/static/js/flow-progressive.js")
+    js = rv.get_data(as_text=True)
+    assert 'b + " × " + n' in js, (
+        "builtins strip must render occurrence counts (spec §11.7 dedup "
+        "display, v0.10.4)."
+    )
+    assert 'node.builtins_used.join(", ")' not in js, (
+        "the verbatim builtins join must be gone — six require(bool,string) "
+        "repeats carried zero information (v0.10.4)."
+    )
+
+
+def test_index_badges_carry_tooltips(client: FlaskClient) -> None:
+    """v0.10.4: the d{N} / 'N unr' shorthand and the header stats carry
+    native title tooltips — previously unexplained anywhere in the UI."""
+    body = client.get("/").get_data(as_text=True)
+    assert 'class="meta-depth" title="max call depth ' in body, (
+        "meta-depth badges must carry a title tooltip explaining d{N} " "(v0.10.4)."
+    )
+    assert (
+        'class="count-item" title="' in body
+    ), "index header count items must carry title tooltips (v0.10.4)."
+    # meta-unresolved only renders when a flow has unresolved calls; Solmate's
+    # default-scope index has at least one (brutalized/low-level shapes), but
+    # don't hard-require it — pin the template instead via the unfiltered
+    # client if absent here.
+    if 'class="meta-unresolved"' in body:
+        assert (
+            'class="meta-unresolved" title="' in body
+        ), "meta-unresolved badges must carry a title tooltip (v0.10.4)."
 
 
 def test_flow_page_back_link_inside_header_row(

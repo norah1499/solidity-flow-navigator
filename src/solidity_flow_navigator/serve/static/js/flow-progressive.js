@@ -215,7 +215,15 @@
     }
 
     if (node.builtins_used && node.builtins_used.length) {
-      wrap.appendChild(el("div", "node-builtins", "builtins: " + node.builtins_used.join(", ")));
+      // v0.10.4 dedup display (spec §11.7): first-appearance order with
+      // occurrence counts — "require(bool,string) × 6" instead of six
+      // verbatim repeats. The underlying tuple keeps order and duplicates;
+      // this is a pure display choice.
+      const counts = new Map();
+      node.builtins_used.forEach((b) => counts.set(b, (counts.get(b) || 0) + 1));
+      const parts = [];
+      counts.forEach((n, b) => parts.push(n > 1 ? b + " × " + n : b));
+      wrap.appendChild(el("div", "node-builtins", "builtins: " + parts.join(", ")));
     }
 
     return wrap;

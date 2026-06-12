@@ -6,16 +6,18 @@
 <header class="index-header">
   <div class="index-header-row">
     <h1 class="index-title">Index</h1>
+    {# v0.10.4: native title tooltips on the stats and per-entry badges —
+       the d{N} / "N unr" shorthand was unexplained anywhere in the UI. #}
     <ul class="index-counts">
-      <li class="count-item">
+      <li class="count-item" title="contracts with at least one externally callable entry point">
         <span class="count-value">{{ total_contracts }}</span>
         <span class="count-label">contracts</span>
       </li>
-      <li class="count-item">
+      <li class="count-item" title="externally callable functions — one Flow page each">
         <span class="count-value">{{ total_entry_points }}</span>
         <span class="count-label">entry points</span>
       </li>
-      <li class="count-item">
+      <li class="count-item" title="call sites no Flow could resolve to a function body (low-level calls, unbound interface calls)">
         <span class="count-value">{{ total_unresolved }}</span>
         <span class="count-label">unresolved</span>
       </li>
@@ -63,10 +65,10 @@
             </a>
             <span class="entry-meta">
               {%- if ep.unresolved_count > 0 -%}
-                <span class="meta-unresolved">{{ ep.unresolved_count }} unr</span>
+                <span class="meta-unresolved" title="{{ ep.unresolved_count }} unresolved call site(s) in this flow — rendered as red pills">{{ ep.unresolved_count }} unr</span>
                 <span class="meta-sep">·</span>
               {%- endif -%}
-              <span class="meta-depth">d{{ ep.max_depth }}</span>
+              <span class="meta-depth" title="max call depth {{ ep.max_depth }}">d{{ ep.max_depth }}</span>
             </span>
           </li>
           {% endfor %}
@@ -84,10 +86,10 @@
             </a>
             <span class="entry-meta">
               {%- if ep.unresolved_count > 0 -%}
-                <span class="meta-unresolved">{{ ep.unresolved_count }} unr</span>
+                <span class="meta-unresolved" title="{{ ep.unresolved_count }} unresolved call site(s) in this flow — rendered as red pills">{{ ep.unresolved_count }} unr</span>
                 <span class="meta-sep">·</span>
               {%- endif -%}
-              <span class="meta-depth">d{{ ep.max_depth }}</span>
+              <span class="meta-depth" title="max call depth {{ ep.max_depth }}">d{{ ep.max_depth }}</span>
             </span>
           </li>
           {% endfor %}

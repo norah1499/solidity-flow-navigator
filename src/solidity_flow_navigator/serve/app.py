@@ -319,6 +319,12 @@ def create_app(
             flow_json=Markup(_safe_json(flow_dict)),
         )
 
+    # v0.10.4: render 404s in the tool's own chrome instead of Flask's bare
+    # default page. Status code stays 404; only the body changes.
+    @app.errorhandler(404)
+    def _not_found(_error):  # type: ignore[no-untyped-def]
+        return render_template("not_found.html"), 404
+
     return app
 
 

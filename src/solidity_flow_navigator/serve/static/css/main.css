@@ -328,6 +328,26 @@ code, pre { font-family: var(--font-mono); }
   text-decoration: underline;
 }
 
+/* ----- error page (v0.10.4) ---------------------------------------------- */
+
+/* Minimal 404 in the tool's own chrome — replaces Flask's bare default.
+   Reuses .back-link for the return affordance. */
+.error-block {
+  margin: 4rem auto;
+  text-align: center;
+}
+.error-title {
+  font-size: 32px;
+  font-weight: 500;
+  margin: 0 0 0.5rem;
+  color: var(--fg-muted);
+}
+.error-text {
+  margin: 0.5rem 0;
+  font-size: 13px;
+  color: var(--fg-text);
+}
+
 /* ----- flow page (Stage 1 placeholder) ----------------------------------- */
 
 /* v0.10.4: `.flow-nav` sits in normal flow as the first item of the
