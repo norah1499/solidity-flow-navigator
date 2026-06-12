@@ -26,10 +26,12 @@ SolFlow is **not a vulnerability scanner**. It emits no findings and makes no se
 Requires Python 3.11+ and a `solc` matching your target, via [solc-select](https://github.com/crytic/solc-select) (Slither needs it to compile):
 
 ```bash
-pipx install git+https://github.com/norah1499/solidity-flow-navigator
+pipx install solflow
 pipx install solc-select
 solc-select install <version> && solc-select use <version>
 ```
+
+For the latest development version instead: `pipx install git+https://github.com/norah1499/solidity-flow-navigator`.
 
 ## Use
 
