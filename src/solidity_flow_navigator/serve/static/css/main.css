@@ -459,6 +459,27 @@ code, pre { font-family: var(--font-mono); }
   padding: 0.05rem 0.3rem;
 }
 
+/* v0.14.1: calm the `N unr` chip in dark mode. The light-tuned salmon fill
+   (#c97070 on #2e1818) read too hot stacked down the index column against
+   the cool dark canvas. Drop the solid fill to a faint wash, soften the
+   border, and mute the text — still clearly red and scannable (P4), just not
+   shouting. The Flow-page UnresolvedNode keeps the full --node-unresolved-*
+   red: those are single in-graph blind-spot markers, not a repeated column.
+   Two selectors mirror the Auto (prefers-color-scheme) and forced
+   (data-theme="dark") paths; light mode is unchanged. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .meta-unresolved {
+    background: rgba(201, 112, 112, 0.09);
+    border-color: rgba(201, 112, 112, 0.50);
+    color: #c79292;
+  }
+}
+:root[data-theme="dark"] .meta-unresolved {
+  background: rgba(201, 112, 112, 0.09);
+  border-color: rgba(201, 112, 112, 0.50);
+  color: #c79292;
+}
+
 .meta-depth,
 .meta-sep {
   color: var(--fg-muted);
