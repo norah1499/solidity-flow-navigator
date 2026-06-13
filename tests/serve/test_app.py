@@ -26,7 +26,13 @@ from flask.testing import FlaskClient
 
 from solidity_flow_navigator.analysis.types import RepoFacts
 from solidity_flow_navigator.flow.types import Flow
-from solidity_flow_navigator.serve.app import _safe_json, build_index, create_app
+from solidity_flow_navigator.serve.app import (
+    THEME_COOKIE,
+    _safe_json,
+    _safe_next,
+    build_index,
+    create_app,
+)
 
 
 @pytest.fixture(scope="module")
@@ -1341,9 +1347,14 @@ def test_index_badges_carry_tooltips(client: FlaskClient) -> None:
 
 def test_node_title_bar_uses_palette_tokens(client: FlaskClient) -> None:
     """v0.10.4: .node-title-bar must use --node-title-bg / --node-title-rule
-    (defined in BOTH palettes) instead of hardcoded light-mode values —
+    (defined in every palette) instead of hardcoded light-mode values —
     the hardcoded cream bar rendered with unreadable light text in dark
-    mode (pre-existing since v0.7.0)."""
+    mode (pre-existing since v0.7.0).
+
+    v0.14.0: with the three-state theme control, each dark token is now
+    defined in THREE places — the light ``:root`` default, the auto-dark
+    ``@media (prefers-color-scheme: dark)`` block, and the forced-dark
+    ``:root[data-theme="dark"]`` mirror — so the count is 3, not 2."""
     css = client.get("/static/css/main.css").get_data(as_text=True)
     assert "background: var(--node-title-bg)" in css, (
         ".node-title-bar background must come from --node-title-bg "
@@ -1352,13 +1363,14 @@ def test_node_title_bar_uses_palette_tokens(client: FlaskClient) -> None:
     assert (
         "border-bottom: 0.5px solid var(--node-title-rule)" in css
     ), ".node-title-bar rule must come from --node-title-rule (v0.10.4)."
-    assert css.count("--node-title-bg:") == 2, (
-        "--node-title-bg must be defined in both the light :root and the "
-        "dark prefers-color-scheme blocks."
+    assert css.count("--node-title-bg:") == 3, (
+        "--node-title-bg must be defined in the light :root, the auto-dark "
+        "prefers-color-scheme block, and the forced-dark [data-theme] mirror "
+        "(v0.14.0 three-state theme)."
     )
     assert (
-        css.count("--node-title-rule:") == 2
-    ), "--node-title-rule must be defined in both palettes."
+        css.count("--node-title-rule:") == 3
+    ), "--node-title-rule must be defined in all three palette blocks (v0.14.0)."
 
 
 def test_flow_page_back_link_inside_header_row(
@@ -1407,4 +1419,135 @@ def test_site_header_brand_is_solflow_title_tag_keeps_full_name(
     assert "<title>Index — Solidity Flow Navigator</title>" in body, (
         "browser <title> must keep the full project name — the brand "
         "change is header-only."
+    )
+
+
+# -- theme control (v0.14.0, spec §8.3) -------------------------------------
+
+
+@pytest.fixture
+def themed_client(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...]
+) -> FlaskClient:
+    """A function-scoped client for cookie tests.
+
+    Cookie-reading tests use the test client's cookie jar (``set_cookie``)
+    rather than a manual ``Cookie:`` header — Werkzeug's client rebuilds the
+    request's Cookie header from its jar, so a manual header is dropped when
+    the jar is empty. A fresh per-test client keeps jar state from leaking
+    across tests (the module-scoped ``client`` is shared and must stay clean).
+    """
+    app = create_app(solmate_facts, solmate_flows)
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
+def test_theme_default_is_auto_no_attribute(client: FlaskClient) -> None:
+    """No cookie → <html> carries no data-theme (Auto follows the OS via
+    prefers-color-scheme) and the Auto segment is the active one."""
+    body = client.get("/").get_data(as_text=True)
+    assert '<html lang="en">' in body, (
+        "Auto (no cookie) must stamp no data-theme so prefers-color-scheme "
+        "governs the palette."
+    )
+    assert "data-theme=" not in body
+    assert 'aria-current="true">Auto</a>' in body
+    assert 'aria-current="true">Dark</a>' not in body
+
+
+def test_dark_cookie_stamps_attribute_and_marks_dark(
+    themed_client: FlaskClient,
+) -> None:
+    """A solflow_theme=dark cookie makes the server stamp data-theme="dark"
+    on <html> (so the forced palette renders with no theme-flash) and marks
+    the Dark segment active."""
+    themed_client.set_cookie(THEME_COOKIE, "dark")
+    body = themed_client.get("/").get_data(as_text=True)
+    assert '<html lang="en" data-theme="dark">' in body
+    assert 'aria-current="true">Dark</a>' in body
+    assert 'aria-current="true">Auto</a>' not in body
+
+
+def test_light_cookie_stamps_attribute(themed_client: FlaskClient) -> None:
+    """A solflow_theme=light cookie forces light even where the OS is dark —
+    the data-theme="light" attribute is what suppresses the prefers-color-scheme
+    rule in main.css (the :not([data-theme="light"]) guard)."""
+    themed_client.set_cookie(THEME_COOKIE, "light")
+    body = themed_client.get("/").get_data(as_text=True)
+    assert '<html lang="en" data-theme="light">' in body
+    assert 'aria-current="true">Light</a>' in body
+
+
+def test_unknown_cookie_value_falls_back_to_auto(themed_client: FlaskClient) -> None:
+    """A junk cookie value is treated as Auto: no attribute, Auto active."""
+    themed_client.set_cookie(THEME_COOKIE, "chartreuse")
+    body = themed_client.get("/").get_data(as_text=True)
+    assert "data-theme=" not in body
+    assert 'aria-current="true">Auto</a>' in body
+
+
+def test_set_theme_dark_sets_cookie_and_redirects(client: FlaskClient) -> None:
+    """GET /theme/dark sets the cookie and redirects back to ``next``."""
+    rv = client.get("/theme/dark?next=/")
+    assert rv.status_code == 302
+    assert rv.headers["Location"].endswith("/")
+    set_cookie = rv.headers.get("Set-Cookie", "")
+    assert f"{THEME_COOKIE}=dark" in set_cookie
+    assert "SameSite=Lax" in set_cookie
+
+
+def test_set_theme_auto_clears_cookie(client: FlaskClient) -> None:
+    """GET /theme/auto clears the cookie (immediate-expiry Set-Cookie) so the
+    OS preference governs again."""
+    rv = client.get("/theme/auto?next=/")
+    assert rv.status_code == 302
+    set_cookie = rv.headers.get("Set-Cookie", "")
+    assert f"{THEME_COOKIE}=" in set_cookie
+    assert "Max-Age=0" in set_cookie or "Expires=Thu, 01 Jan 1970" in set_cookie
+
+
+def test_set_theme_invalid_value_is_404(client: FlaskClient) -> None:
+    """An unrecognized theme value is a bad URL, not a silent no-op."""
+    assert client.get("/theme/bogus").status_code == 404
+
+
+def test_set_theme_blocks_open_redirect(client: FlaskClient) -> None:
+    """A non-local ``next`` is refused — the route redirects to the index
+    instead of bouncing to an attacker-supplied URL."""
+    rv = client.get("/theme/dark?next=https://evil.example/x")
+    assert rv.status_code == 302
+    loc = rv.headers["Location"]
+    assert "evil.example" not in loc
+    assert loc.endswith("/")
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("/flow/Foo.bar(uint256)", "/flow/Foo.bar(uint256)"),
+        ("/", "/"),
+        (None, "/"),
+        ("", "/"),
+        ("https://evil.example", "/"),
+        ("//evil.example", "/"),
+        ("javascript:alert(1)", "/"),
+    ],
+)
+def test_safe_next_only_allows_local_paths(raw: str | None, expected: str) -> None:
+    """``_safe_next`` honors only same-origin absolute paths; everything else
+    (external, protocol-relative, scheme) collapses to the index."""
+    assert _safe_next(raw) == expected
+
+
+def test_theme_control_present_and_index_stays_js_free(client: FlaskClient) -> None:
+    """The header carries the three theme links, and the index remains
+    JavaScript-free (spec §8.3 no-JS non-feature): the control is server-side
+    links only, so no <script> tag appears on the index."""
+    body = client.get("/").get_data(as_text=True)
+    assert 'class="theme-control"' in body
+    for value in ("auto", "light", "dark"):
+        assert f"/theme/{value}" in body
+    assert "<script" not in body, (
+        "the index must stay JavaScript-free — the theme control is "
+        "server-side links, not a script (spec §8.3)."
     )

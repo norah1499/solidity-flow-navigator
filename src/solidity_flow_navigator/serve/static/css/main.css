@@ -45,27 +45,70 @@
   --tok-number: #993c1d;
   --tok-comment: #5f5e5a;
 
+  /* Clickable call-site lines inside FunctionNode bodies (§10.2). Tokenized
+     (v0.14.0) so a manually-forced Dark theme restyles them too — these
+     interaction colors previously lived only in prefers-color-scheme blocks,
+     which an explicit data-theme override cannot reach. */
+  --tok-call: #5a8fc4;
+  --call-hover-bg: rgba(58, 109, 176, 0.12);
+  --call-expanded-bg: rgba(90, 143, 196, 0.10);
+  --call-expanded-edge: rgba(90, 143, 196, 0.40);
+  --call-expanded-mark: rgba(90, 143, 196, 0.80);
+
   /* Typography */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
+/* ---- Dark palette --------------------------------------------------------
+   Three theme states (the §8.3 header theme control): Auto (follow the OS),
+   Light, and Dark. The server stamps data-theme="light|dark" on <html> for the
+   two forced states and stamps nothing for Auto. The dark palette is therefore
+   applied under TWO selectors, kept identical by hand — CSS cannot share one
+   declaration block between a media-query-gated rule and an attribute rule:
+     1. Auto + OS dark → @media (prefers-color-scheme: dark) :root:not([data-theme="light"])
+        (the :not guard lets an explicit Light choice override an OS dark pref)
+     2. Forced Dark    → :root[data-theme="dark"]   (mirror block, below)
+   Light is the :root default at the top of the file; an explicit Light choice
+   needs no block of its own — it merely suppresses (1) and leaves the default.
+   ------------------------------------------------------------------------- */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg-page: #161614;
-    --bg-surface: #1d1d1b;
+  :root:not([data-theme="light"]) {
+    /* Dark mode mirrors a code editor. The function code panels are the
+       DARKEST surface (the "code area", --node-fn-bg below), and the
+       page/canvas sits ABOVE them as a lighter gray (the editor's
+       workbench/desktop). So panels read as near-black editor windows
+       floating on the IDE chrome. This deliberately inverts the usual
+       elevation model (base-darkest) — the original #161614 page /
+       #1d1d1b panel pairing left the two only 7/channel apart and the
+       code panels barely separated from the canvas; the flip opens a wide,
+       editor-style gap (canvas ~22/channel above the panel black). The
+       canvas carries a subtle COOL blue tint (B highest) rather than a
+       neutral or warm gray: a flat desaturated gray at this lightness
+       reads dead — Material's dark-theme guidance flags pure grey as
+       "dull and lifeless" — whereas the cool cast is what every editor
+       canvas uses (One Dark #282c34, Nord, Tokyo Night) and reads
+       crisp/technical. The code panel stays warm near-black, so the warm
+       panel advances while the cool canvas recedes — the temperature split
+       reinforces the editor-window-on-desktop depth. Light mode stays warm
+       cream; this is a deliberate warm-light / cool-dark pairing. */
+    --bg-page: #282c34;        /* cool blue-gray canvas (One Dark) — lightest ground */
+    --bg-surface: #1d1d1b;     /* header + buttons: mid-tone dark chrome */
     --fg-text: #e8e6dc;
     --fg-muted: #9f9d92;
     --border-strong: #c2c0b6;
     --border-soft: #3a3a36;
 
-    --node-fn-bg: #1d1d1b;
+    --node-fn-bg: #121211;     /* near-black code-editor surface */
     --node-fn-border: #c2c0b6;
 
-    /* Dark: slightly LIGHTER than the node interior (the inverse of the
-       light mode's slightly-darker-cream), light-ink rule matching the
-       node border weight. */
-    --node-title-bg: #2a2a25;
+    /* Dark: a cool "filename tab" strip — slightly lighter than the
+       near-black node interior so it reads as a raised header, kept in the
+       canvas's cool blue family. The old warm #2a2a25 clashed once the
+       canvas went cool: it read as the same dull warm gray we moved away
+       from. Stays DARKER than the canvas so the strip belongs to the panel,
+       not the desktop. Light-ink rule matches the node border weight. */
+    --node-title-bg: #20242c;
     --node-title-rule: #c2c0b6;
 
     --node-mod-bg: #1a2433;
@@ -84,7 +127,55 @@
     --tok-string: #a8d18c;
     --tok-number: #d8a081;
     --tok-comment: #8a897f;
+
+    --tok-call: #7fb3eb;
+    --call-hover-bg: rgba(127, 179, 235, 0.16);
+    --call-expanded-bg: rgba(127, 179, 235, 0.14);
+    --call-expanded-edge: rgba(127, 179, 235, 0.45);
+    --call-expanded-mark: rgba(127, 179, 235, 0.85);
   }
+}
+
+/* Forced Dark (header theme control, §8.3). Mirrors the prefers-color-scheme
+   block above value-for-value — see there for the palette rationale. Kept in
+   sync by hand; CSS can't share a block across a media-gated and an
+   attribute-gated selector. */
+:root[data-theme="dark"] {
+  --bg-page: #282c34;
+  --bg-surface: #1d1d1b;
+  --fg-text: #e8e6dc;
+  --fg-muted: #9f9d92;
+  --border-strong: #c2c0b6;
+  --border-soft: #3a3a36;
+
+  --node-fn-bg: #121211;
+  --node-fn-border: #c2c0b6;
+
+  --node-title-bg: #20242c;
+  --node-title-rule: #c2c0b6;
+
+  --node-mod-bg: #1a2433;
+  --node-mod-border: #6b94c8;
+
+  --node-unresolved-bg: #2e1818;
+  --node-unresolved-border: #c97070;
+
+  --node-external-bg: #232321;
+  --node-external-border: #888888;
+
+  --edge-color: #6f6f6f;
+
+  --tok-keyword: #7fb3eb;
+  --tok-name: #b5b1ff;
+  --tok-string: #a8d18c;
+  --tok-number: #d8a081;
+  --tok-comment: #8a897f;
+
+  --tok-call: #7fb3eb;
+  --call-hover-bg: rgba(127, 179, 235, 0.16);
+  --call-expanded-bg: rgba(127, 179, 235, 0.14);
+  --call-expanded-edge: rgba(127, 179, 235, 0.45);
+  --call-expanded-mark: rgba(127, 179, 235, 0.85);
 }
 
 /* ----- reset / base ------------------------------------------------------- */
@@ -126,6 +217,37 @@ code, pre { font-family: var(--font-mono); }
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-muted);
+}
+
+/* v0.14.0 theme control (§8.3): three-state Auto / Light / Dark segmented
+   control at the right edge of the shared header, rendered as plain anchor
+   links — NO client-side JavaScript, so the index stays a static page (the
+   §8.3 no-JS non-feature is preserved). The server sets a cookie and stamps
+   data-theme on <html>; toggling is an ordinary navigation. The active
+   segment is an inverted (fg-on-surface) pill marked with aria-current; the
+   others are quiet muted links. margin-left:auto pushes the control past the
+   title/repo; align-self:center vertically centers the bordered pill against
+   the baseline-aligned header text. */
+.theme-control {
+  margin-left: auto;
+  align-self: center;
+  display: inline-flex;
+  border: 0.5px solid var(--border-soft);
+  border-radius: 3px;
+  overflow: hidden;
+  font-size: 11px;
+}
+.theme-seg {
+  padding: 0.2rem 0.5rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  border-left: 0.5px solid var(--border-soft);
+}
+.theme-seg:first-child { border-left: 0; }
+.theme-seg:hover { color: var(--fg-text); }
+.theme-seg[aria-current="true"] {
+  background: var(--fg-text);
+  color: var(--bg-surface);
 }
 
 .site-main {
@@ -767,30 +889,17 @@ body.flow-page .flow-header {
 .src-line { display: inline; }
 .src-line--call { cursor: pointer; border-radius: 2px; }
 .src-line--call:hover {
-  background: rgba(58, 109, 176, 0.12);
-  box-shadow: -4px 0 0 rgba(58, 109, 176, 0.12);
+  background: var(--call-hover-bg);
+  box-shadow: -4px 0 0 var(--call-hover-bg);
 }
 .src-line--expanded {
-  background: rgba(90, 143, 196, 0.10);
-  box-shadow: -4px 0 0 rgba(90, 143, 196, 0.40);
+  background: var(--call-expanded-bg);
+  box-shadow: -4px 0 0 var(--call-expanded-edge);
 }
 .src-line--expanded::after {
   content: " ▾";
-  color: rgba(90, 143, 196, 0.80);
+  color: var(--call-expanded-mark);
   font-size: 0.9em;
-}
-@media (prefers-color-scheme: dark) {
-  .src-line--call:hover {
-    background: rgba(127, 179, 235, 0.16);
-    box-shadow: -4px 0 0 rgba(127, 179, 235, 0.16);
-  }
-  .src-line--expanded {
-    background: rgba(127, 179, 235, 0.14);
-    box-shadow: -4px 0 0 rgba(127, 179, 235, 0.45);
-  }
-  .src-line--expanded::after {
-    color: rgba(127, 179, 235, 0.85);
-  }
 }
 
 /* v0.5 iter-2: soft-blue call-name token coloring. The renderer wraps any
@@ -800,23 +909,17 @@ body.flow-page .flow-header {
    (`.src .n*`) only inside clickable lines — bare prose stays at the
    keyword/name palette elsewhere.
 
-   #5a8fc4 was picked from the conversation hint: muted hyperlink-blue,
-   distinct from --tok-keyword (#0c447c — much darker) and the modifier
-   badge blue (#3a6db0 — also darker, more saturated). In dark mode it
-   shifts up to the same #7fb3eb the keyword override uses, keeping the
-   ladder consistent. */
+   The color is the --tok-call token (light #5a8fc4 muted hyperlink-blue,
+   distinct from --tok-keyword #0c447c — much darker — and the modifier badge
+   blue #3a6db0 — also darker, more saturated; dark mode shifts it up to
+   #7fb3eb, the same value the keyword override uses, keeping the ladder
+   consistent). Tokenized at v0.14.0 so a forced Dark theme picks it up. */
 .src .src-line--call .src-call-name,
 .src .src-line--call .src-call-name * {
-  color: #5a8fc4;
+  color: var(--tok-call);
 }
 .src-line--call:hover .src-call-name {
   text-decoration: underline dotted;
-}
-@media (prefers-color-scheme: dark) {
-  .src .src-line--call .src-call-name,
-  .src .src-line--call .src-call-name * {
-    color: #7fb3eb;
-  }
 }
 
 /* v0.5 stage 3: compact pill-style nodes for terminal variants

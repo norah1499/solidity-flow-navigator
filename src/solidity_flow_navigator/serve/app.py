@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import flask.cli
-from flask import Flask, abort, render_template
+from flask import Flask, Response, abort, redirect, render_template, request
 from markupsafe import Markup
 
 from ..analysis.types import RepoFacts
@@ -251,6 +251,17 @@ def _signature_suffix(flow: Flow) -> str:
 # App factory
 # ---------------------------------------------------------------------------
 
+# v0.14.0 theme control (spec §8.3). The header's Auto / Light / Dark links hit
+# ``/theme/<value>``: "light"/"dark" set this cookie, "auto" clears it. The
+# value is read back per-request in the context processor and stamped as
+# ``data-theme`` on ``<html>``, so the choice survives navigation with no
+# client-side JavaScript (the index stays static). The dark palette applies
+# under both ``prefers-color-scheme`` (Auto) and ``[data-theme="dark"]``
+# (forced) in main.css.
+THEME_COOKIE = "solflow_theme"
+THEME_VALUES = ("auto", "light", "dark")
+THEME_MAX_AGE = 60 * 60 * 24 * 365  # one year
+
 
 def create_app(
     facts: RepoFacts,
@@ -301,9 +312,18 @@ def create_app(
     # Common context for every rendered template.
     @app.context_processor
     def _inject_globals() -> dict[str, Any]:
+        # v0.14.0: theme is read per-request from the cookie the set_theme
+        # route writes. ``theme`` (None | "light" | "dark") drives the
+        # data-theme attribute on <html>; ``current_theme`` (always one of
+        # "auto"/"light"/"dark") marks the active segment in the header
+        # control. An absent or unrecognized cookie falls back to Auto.
+        cookie = request.cookies.get(THEME_COOKIE)
+        forced = cookie if cookie in ("light", "dark") else None
         return {
             "repo_path": facts.repo_path,
             "expand_all": expand_all,
+            "theme": forced,
+            "current_theme": forced or "auto",
         }
 
     # solflow is a localhost dev tool; an auditor swapping a JS/CSS file mid-
@@ -327,6 +347,24 @@ def create_app(
             total_unresolved=total_unresolved,
             scope=scope,
         )
+
+    @app.route("/theme/<value>")
+    def set_theme(value: str) -> Response:
+        # v0.14.0 (spec §8.3). "auto" clears the cookie so the OS preference
+        # governs again (prefers-color-scheme); "light"/"dark" force a palette.
+        # Any other value is a bad URL → 404. The redirect returns to the page
+        # the control was on (``next``), validated to a local path so the
+        # endpoint can't be used as an open redirect.
+        if value not in THEME_VALUES:
+            abort(404)
+        response = redirect(_safe_next(request.args.get("next")))
+        if value == "auto":
+            response.delete_cookie(THEME_COOKIE)
+        else:
+            response.set_cookie(
+                THEME_COOKIE, value, max_age=THEME_MAX_AGE, samesite="Lax"
+            )
+        return response
 
     @app.route("/flow/<path:url_id>")
     def flow_page(url_id: str) -> str:
@@ -363,6 +401,21 @@ def _safe_json(obj: Any) -> str:
     unchanged even when the analyzed source contains those substrings.
     """
     return json.dumps(obj, ensure_ascii=False).replace("<", "\\u003c")
+
+
+def _safe_next(raw: str | None) -> str:
+    """Validate a theme-toggle ``next`` redirect target to a local path.
+
+    The header control passes the current page as ``?next=`` so toggling
+    returns you where you were. Only same-origin absolute paths are honored —
+    the value must start with a single ``/``; external URLs and
+    protocol-relative ``//host`` targets fall back to the index. solflow only
+    ever binds localhost, but refusing to bounce to an attacker-supplied URL
+    is cheap hygiene and keeps the endpoint from being a generic open redirect.
+    """
+    if raw and raw.startswith("/") and not raw.startswith("//"):
+        return raw
+    return "/"
 
 
 # ---------------------------------------------------------------------------

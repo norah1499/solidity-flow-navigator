@@ -1,5 +1,9 @@
 <!doctype html>
-<html lang="en">
+{# v0.14.0: `theme` is None for Auto (follow the OS via prefers-color-scheme)
+   or "light"/"dark" when the user forced a palette through the header control.
+   The server stamps it from a cookie so there is no theme-flash on load and the
+   index needs no JavaScript (spec §8.3). #}
+<html lang="en"{% if theme %} data-theme="{{ theme }}"{% endif %}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -15,6 +19,14 @@
        full "Solidity Flow Navigator" name (header-only branding decision). #}
     <a class="site-title" href="{{ url_for('index') }}">solflow</a>
     <span class="site-repo">{{ repo_path }}</span>
+    {# v0.14.0 theme control (§8.3): plain links, no JS. Each targets the
+       set-theme route with the current path as `next` so the toggle returns
+       to the page you were on. `current_theme` is "auto"/"light"/"dark". #}
+    <nav class="theme-control" aria-label="Color theme">
+      <a class="theme-seg" href="{{ url_for('set_theme', value='auto', next=request.path) }}"{% if current_theme == 'auto' %} aria-current="true"{% endif %}>Auto</a>
+      <a class="theme-seg" href="{{ url_for('set_theme', value='light', next=request.path) }}"{% if current_theme == 'light' %} aria-current="true"{% endif %}>Light</a>
+      <a class="theme-seg" href="{{ url_for('set_theme', value='dark', next=request.path) }}"{% if current_theme == 'dark' %} aria-current="true"{% endif %}>Dark</a>
+    </nav>
   </header>
   <main class="site-main">
     {% block content %}{% endblock %}
