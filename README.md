@@ -25,6 +25,7 @@ The first job in any audit is reconstructing what actually happens when someone 
 - **One Flow per entry point.** The index lists every externally callable function, grouped by contract and split into mutating vs. read-only, with modifier badges, call-tree depth, and unresolved-target counts per entry: the whole audit surface on one page.
 - **Real source, not boxes.** Every node renders the target function's actual code, syntax-highlighted and line-numbered. Click a call site and the callee expands beside it, the edge anchored to the exact line that makes the call.
 - **Progressive or bird's-eye.** Flows open at the root and expand on demand, so you reveal only the paths you're tracing. `--expand-all` renders the full call tree at page load for a complete overview.
+- **Light or dark.** A header toggle sets the palette — Auto (follows your OS), Light, or Dark — so long audit sessions stay easy on the eyes. The choice is server-rendered: no flash on load, and your preference never leaves the machine.
 - **It never silently lies.** When a call target can't be resolved statically (an interface with no bound implementation, `addr.call(...)`, computed-target Yul), the node is explicitly marked unresolved, with the reason. No guessing, no silent omissions. The auditor's trust in a Flow's completeness within its declared scope is the load-bearing property.
 - **Scope you control.** Inline a dependency, stub a dense in-tree math library, or exclude test and mock contracts, via `solflow.toml` or CLI flags (see [Configuration](#configuration)).
 - **Local and private.** Analysis runs entirely on your machine and the server binds only to `127.0.0.1`. Audit code under NDA is never uploaded anywhere.
@@ -121,7 +122,7 @@ Opening an entry point renders its full call flow; every callee panel shows the 
 
 ![Expanded call-flow graph of Morpho.liquidate](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/flow-liquidate-overview.png)
 
-![Zoomed view of the liquidate flow with inherited library functions](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/flow-liquidate-detail.png)
+![Zoomed view of the liquidate flow with library functions](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/flow-liquidate-detail.png)
 
 </details>
 
