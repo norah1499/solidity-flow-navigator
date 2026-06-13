@@ -9,9 +9,9 @@
 
 SolFlow compiles a Solidity repository, extracts call-graph facts with [Slither](https://github.com/crytic/slither), and serves one interactive call-flow visualization (a **Flow**) per external entry point. Every node renders the target function's real source, syntax-highlighted and line-numbered. Analysis runs entirely on your machine. Built for Web3 security auditing.
 
-![SolFlow navigating Morpho Blue: the entry-point index, the fully expanded liquidate flow, and the same flow zoomed to source level](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/demo.gif)
+![SolFlow on Morpho Blue: launching solflow from the terminal, the entry-point index, expanding the liquidate flow into its full call tree, then switching to dark mode](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/demo.gif)
 
-*SolFlow on [Morpho Blue](https://github.com/morpho-org/morpho-blue): the entry-point index, the fully expanded `liquidate` flow, and the same flow zoomed to source level. Pausable stills are under [Screenshots](#screenshots).*
+*SolFlow on [Morpho Blue](https://github.com/morpho-org/morpho-blue): launch from the terminal, browse the entry-point index, expand the `liquidate` flow into its full call tree, then flip to dark mode. Pausable stills are under [Screenshots](#screenshots).*
 
 > [!NOTE]
 > SolFlow is **not a vulnerability scanner**. It emits no findings and makes no security claims. It shows you the code's shape so you can find the problems faster.
