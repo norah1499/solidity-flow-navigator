@@ -16,3 +16,7 @@ src/solidity_flow_navigator/serve/static/css/pygments.css
 
 # Local working notes; deliberately not part of the published repo.
 HANDOFF.md
+
+# Installed coding-assistant skills (e.g. `npx skills add`); local tooling, not source.
+.agents/
+skills-lock.json

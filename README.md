@@ -1,29 +1,40 @@
-# SolFlow (Solidity Flow Navigator)
+# SolFlow
 
 [![CI](https://github.com/norah1499/solidity-flow-navigator/actions/workflows/ci.yml/badge.svg)](https://github.com/norah1499/solidity-flow-navigator/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/solflow)](https://pypi.org/project/solflow/)
+[![Python versions](https://img.shields.io/pypi/pyversions/solflow)](https://pypi.org/project/solflow/)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
-**Read a contract the way it executes, not the way its files are organized.**
+**Read a Solidity contract the way it executes, not the way its files are organized.**
 
-SolFlow compiles a Solidity repository, extracts call-graph facts with [Slither](https://github.com/crytic/slither), and serves one interactive call-flow visualization per external entry point. Every panel shows the function's real source. Built for smart contract auditing.
+SolFlow compiles a Solidity repository, extracts call-graph facts with [Slither](https://github.com/crytic/slither), and serves one interactive call-flow visualization (a **Flow**) per external entry point. Every node renders the target function's real source, syntax-highlighted and line-numbered. Analysis runs entirely on your machine. Built for Web3 security auditing.
 
 ![SolFlow navigating Morpho Blue: the entry-point index, the fully expanded liquidate flow, and the same flow zoomed to source level](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/demo.gif)
 
 *SolFlow on [Morpho Blue](https://github.com/morpho-org/morpho-blue): the entry-point index, the fully expanded `liquidate` flow, and the same flow zoomed to source level. Pausable stills are under [Screenshots](#screenshots).*
 
+> [!NOTE]
+> SolFlow is **not a vulnerability scanner**. It emits no findings and makes no security claims. It shows you the code's shape so you can find the problems faster.
+
 ## Why
 
-The first job in any audit is reconstructing what actually happens when someone calls an entry point. The answer is scattered across base contracts, libraries, and modifiers in a dozen files. SolFlow lays it out as a graph you can read:
+The first job in any audit is reconstructing what actually happens when someone calls an entry point. The answer is scattered across base contracts, libraries, and modifiers in a dozen files. SolFlow lays it out as a graph you can read.
 
-- **One Flow per entry point.** The index lists every externally callable function, grouped by contract and split into mutating vs read-only, with modifier badges, call-tree depth, and unresolved-target counts per entry: the whole audit surface on one page.
+## Features
+
+- **One Flow per entry point.** The index lists every externally callable function, grouped by contract and split into mutating vs. read-only, with modifier badges, call-tree depth, and unresolved-target counts per entry: the whole audit surface on one page.
 - **Real source, not boxes.** Every node renders the target function's actual code, syntax-highlighted and line-numbered. Click a call site and the callee expands beside it, the edge anchored to the exact line that makes the call.
-- **It never silently lies.** When a call target can't be resolved statically (an interface with no bound implementation, `addr.call(...)`, computed-target Yul), the node is explicitly marked unresolved, with the reason. No guessing, no silent omissions.
-- **Local and private.** Analysis runs entirely on your machine and the server binds only to `127.0.0.1`. Audit code is never uploaded anywhere.
+- **Progressive or bird's-eye.** Flows open at the root and expand on demand, so you reveal only the paths you're tracing. `--expand-all` renders the full call tree at page load for a complete overview.
+- **It never silently lies.** When a call target can't be resolved statically (an interface with no bound implementation, `addr.call(...)`, computed-target Yul), the node is explicitly marked unresolved, with the reason. No guessing, no silent omissions. The auditor's trust in a Flow's completeness within its declared scope is the load-bearing property.
+- **Scope you control.** Inline a dependency, stub a dense in-tree math library, or exclude test and mock contracts, via `solflow.toml` or CLI flags (see [Configuration](#configuration)).
+- **Local and private.** Analysis runs entirely on your machine and the server binds only to `127.0.0.1`. Audit code under NDA is never uploaded anywhere.
 
-SolFlow is **not a vulnerability scanner**. It emits no findings and makes no security claims. It shows you the code's shape so you can find the problems faster.
+## Prerequisites
 
-## Install
+- **Python 3.11+**
+- **A `solc` matching your target**, via [solc-select](https://github.com/crytic/solc-select). Slither needs it to compile the project.
 
-Requires Python 3.11+ and a `solc` matching your target, via [solc-select](https://github.com/crytic/solc-select) (Slither needs it to compile):
+## Installation
 
 ```bash
 pipx install solflow
@@ -31,39 +42,71 @@ pipx install solc-select
 solc-select install <version> && solc-select use <version>
 ```
 
-For the latest development version instead: `pipx install git+https://github.com/norah1499/solidity-flow-navigator`.
+For the latest development version: `pipx install git+https://github.com/norah1499/solidity-flow-navigator`.
 
-To uninstall: `pipx uninstall solflow` removes the tool and all its bundled dependencies; SolFlow writes nothing outside its own install directory, so nothing else is left behind. `solc-select` and its downloaded compilers are a separate install, removable with `pipx uninstall solc-select`.
+To uninstall, `pipx uninstall solflow` removes the tool and all its bundled dependencies; SolFlow writes nothing outside its own install directory. `solc-select` and its downloaded compilers are a separate install, removable with `pipx uninstall solc-select`.
 
-## Use
+## Usage
 
 ```bash
 solflow path/to/your/solidity/project
 ```
 
-Point it at the repository root, where Slither can resolve dependencies. SolFlow compiles the project, binds `127.0.0.1:8080` (or the next free port), and prints the URL.
+Point it at the repository root, where Slither can resolve dependencies. SolFlow compiles the project, binds `127.0.0.1:8080` (or the next free port), and prints the URL. Open it in your browser to navigate the Flows.
 
-Compilation goes through [crytic-compile](https://github.com/crytic/crytic-compile), so any build system it detects should work (Foundry, Hardhat, Truffle, Brownie, plain solc); Foundry projects are what SolFlow is tested against. If anything goes wrong on the first run, see [If the first run fails](#if-the-first-run-fails) below.
+Compilation goes through [crytic-compile](https://github.com/crytic/crytic-compile), so any build system it detects should work (Foundry, Hardhat, Truffle, Brownie, plain solc). Foundry projects are what SolFlow is tested against.
 
-Useful flags (run `solflow --help` for the full reference, grouped into **Scope**, **Resolution**, **Rendering**, and **Server**):
+## Configuration
+
+SolFlow runs with sensible defaults. By default it excludes common test and mock directories (`**/*.t.sol`, `**/test/**`, `**/tests/**`, `**/mocks/**`) and `*Mock*` contracts. Refine scope through a config file, CLI flags, or both. CLI flags override file values; file values override defaults.
+
+### CLI flags
+
+Run `solflow --help` for the full reference, grouped into **Scope**, **Resolution**, **Rendering**, and **Server**.
 
 | Flag | What it does |
 |------|--------------|
+| `--exclude-path GLOB` | Drop contracts whose file path matches the glob (repeatable) |
+| `--exclude-contract PATTERN` | Drop contracts whose name matches the pattern (repeatable) |
+| `--inline-library NAME` | Recurse into a `lib/<NAME>/` dependency instead of stubbing it (repeatable) |
+| `--stub-path GLOB` | Stop at a terminal node for matching in-tree call targets, e.g. dense math libraries (repeatable) |
 | `--expand-all` | Open every Flow fully expanded, for a bird's-eye view |
-| `--exclude-path GLOB`, `--exclude-contract PATTERN` | Narrow which contracts produce Flows |
-| `--inline-library NAME` | Recurse into a `lib/<NAME>/` dependency instead of stubbing it |
-| `--port N` | Bind a specific port |
+| `--port N` | Bind a specific port (the default auto-selects from 8080 upward) |
+| `--config PATH` | Use a config file other than `solflow.toml` in the working directory |
 
-## If the first run fails
+### Config file
 
-SolFlow is built on [Slither](https://github.com/crytic/slither) and is contingent on it: anything Slither cannot compile and analyze, SolFlow cannot visualize. When that happens, SolFlow prints the underlying error verbatim and exits without producing anything. No partial Flows, by design: a half-compiled picture would silently mislead an audit. SolFlow never installs dependencies or modifies the target repository to make a build pass.
+SolFlow looks for `solflow.toml` in the directory you invoke it from. All keys are optional; a missing key uses its default, and setting a key to `[]` clears the default.
 
-The rule of thumb: if the project does not build on its own in that directory, SolFlow will not build it either. The two most common first-run failures are environment issues, not tool bugs:
+```toml
+[scope]
+exclude_paths = ["**/*.t.sol", "**/test/**", "**/tests/**", "**/mocks/**"]
+exclude_contracts = ["*Mock*"]
+inline_libraries = []
+stub_paths = []
+```
+
+## How it works
+
+SolFlow is a thin pipeline over Slither's analysis model:
+
+1. **Compile** the repository via crytic-compile, then extract raw facts from Slither: contracts, functions, modifiers, inheritance order, call edges, and source locations.
+2. **Build a Flow per entry point**, applying your scope rules: modifiers folded into the call tree, virtual dispatch resolved through the C3 chain, cross-contract calls resolved against bindings, and every unresolvable branch explicitly marked.
+3. **Serve** the Flows as progressive HTML+SVG graphs from a local Flask server, with source highlighted server-side by [Pygments](https://pygments.org/).
+
+## When the first run fails
+
+SolFlow is built on Slither and is contingent on it: anything Slither cannot compile and analyze, SolFlow cannot visualize. When that happens, SolFlow prints the underlying error verbatim and exits without producing anything.
+
+> [!IMPORTANT]
+> There is no partial output and no auto-remediation, by design. SolFlow never installs dependencies or modifies the target repository to make a build pass; a half-compiled picture would silently mislead an audit. The rule of thumb: if the project does not build on its own in that directory, SolFlow will not build it either.
+
+The two most common first-run failures are environment issues, not tool bugs:
 
 1. **solc version mismatch.** The active `solc` does not match the project's pragma. Fix: `solc-select install <version> && solc-select use <version>`.
-2. **Missing dependencies.** The target was cloned fresh and its libraries were never fetched. Fix: run the project's own setup first (`forge install`, `npm install`, or equivalent) and confirm the project's own build succeeds before pointing SolFlow at it.
+2. **Missing dependencies.** The target was cloned fresh and its libraries were never fetched. Fix: run the project's own setup (`forge install`, `npm install`, or equivalent) and confirm its build succeeds before pointing SolFlow at it.
 
-If the project builds cleanly and Slither itself still fails on it (this happens on some large protocols), that is an upstream Slither limitation rather than a SolFlow defect; an issue is still welcome so it can be tracked.
+If the project builds cleanly and Slither itself still fails on it (this happens on some large protocols), that is an upstream Slither limitation rather than a SolFlow defect; an [issue](https://github.com/norah1499/solidity-flow-navigator/issues) is still welcome so it can be tracked.
 
 ## Screenshots
 
@@ -82,7 +125,7 @@ Opening an entry point renders its full call flow; every callee panel shows the 
 
 </details>
 
-## Contributing
+## Development
 
 Issues and pull requests are welcome. Before opening a PR, make sure these pass:
 
@@ -91,7 +134,3 @@ pytest
 black --check .
 ruff check
 ```
-
-## License
-
-AGPL-3.0, and not a free choice: SolFlow builds on Slither and crytic-compile, both AGPL-3.0, so the combined work inherits their license. In practice this is the same license situation as Slither itself, which most auditors already run daily. SolFlow executes entirely on your machine and never transmits the code it analyzes, so using it on client or NDA work is no different from using Slither on that work. The license's network clause applies only if you host a SolFlow instance for others; in that case you must offer them the source, and the index footer links back here for exactly that purpose.
