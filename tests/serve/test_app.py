@@ -27,7 +27,9 @@ from flask.testing import FlaskClient
 from solidity_flow_navigator.analysis.types import RepoFacts
 from solidity_flow_navigator.flow.types import Flow
 from solidity_flow_navigator.serve.app import (
+    BOOKMARK_COOKIE,
     THEME_COOKIE,
+    _parse_bookmarks,
     _safe_json,
     _safe_next,
     build_index,
@@ -120,7 +122,9 @@ def _extract_contract_block(body: str, contract_name: str) -> str:
     ``</article>``. Avoids pulling in an HTML parser for what is a simple
     boundary problem at this scale.
     """
-    needle = '<article class="contract-block">'
+    # v0.15.0: the article now carries an id anchor (id="c-<slug>") for the
+    # bookmark return-to-row redirect, so match the opening tag without the ``>``.
+    needle = '<article class="contract-block"'
     start = 0
     while True:
         article_start = body.find(needle, start)
@@ -1015,6 +1019,7 @@ def test_unknown_top_level_path_uses_styled_404(client: FlaskClient) -> None:
         "/static/vendor/dagre.min.js",
         "/static/vendor/d3.min.js",
         "/static/js/flow-progressive.js",
+        "/static/js/index.js",
     ],
 )
 def test_static_assets_served(client: FlaskClient, path: str) -> None:
@@ -1539,15 +1544,293 @@ def test_safe_next_only_allows_local_paths(raw: str | None, expected: str) -> No
     assert _safe_next(raw) == expected
 
 
-def test_theme_control_present_and_index_stays_js_free(client: FlaskClient) -> None:
-    """The header carries the three theme links, and the index remains
-    JavaScript-free (spec §8.3 no-JS non-feature): the control is server-side
-    links only, so no <script> tag appears on the index."""
+def test_theme_control_is_server_side_links(client: FlaskClient) -> None:
+    """The header carries the three theme links, server-side (plain links + a
+    cookie, no script of their own). The index does load index.js (v0.15.0
+    bookmark enhancement), but the theme control itself needs no JavaScript."""
     body = client.get("/").get_data(as_text=True)
     assert 'class="theme-control"' in body
     for value in ("auto", "light", "dark"):
         assert f"/theme/{value}" in body
-    assert "<script" not in body, (
-        "the index must stay JavaScript-free — the theme control is "
-        "server-side links, not a script (spec §8.3)."
+    # The only script on the index is the bookmark progressive-enhancement file;
+    # there are no inline scripts and no theme-control script.
+    assert "js/index.js" in body
+    assert "<script>" not in body, "the index carries no INLINE scripts."
+
+
+# -- bookmarks (v0.15.0, spec §8.3) -----------------------------------------
+
+# A real Solmate entry/contract that exist under default scope (used by the
+# flow-page test above too), so the bookmark round-trips have something to match.
+_BM_ENTRY = "ERC4626.deposit(uint256,address)"
+_BM_CONTRACT = "Owned"
+
+
+@pytest.fixture
+def bookmark_client(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...]
+) -> FlaskClient:
+    """Function-scoped client with its own cookie jar for bookmark round-trips.
+
+    Same rationale as ``themed_client``: cookie state must not leak across tests
+    and the jar must rebuild the request Cookie header from server-set cookies.
+    """
+    app = create_app(solmate_facts, solmate_flows)
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
+def test_parse_bookmarks_is_defensive() -> None:
+    """``_parse_bookmarks`` degrades junk to an empty list, and preserves order
+    while dropping duplicates and unprefixed entries."""
+    assert _parse_bookmarks(None) == []
+    assert _parse_bookmarks("") == []
+    assert _parse_bookmarks("not json") == []
+    assert _parse_bookmarks(json.dumps({"x": 1})) == []  # not a list
+    assert _parse_bookmarks(json.dumps(["e:a", "c:b", "junk", "e:a", 5])) == [
+        "e:a",
+        "c:b",
+    ]
+
+
+def test_bookmark_entry_sets_cookie_and_redirects(client: FlaskClient) -> None:
+    """GET /bookmark/entry/<id> sets the bookmarks cookie and redirects to
+    ``next``."""
+    ident = urllib.parse.quote(_BM_ENTRY, safe="")
+    rv = client.get(f"/bookmark/entry/{ident}?next=/")
+    assert rv.status_code == 302
+    assert rv.headers["Location"].endswith("/")
+    set_cookie = rv.headers.get("Set-Cookie", "")
+    assert f"{BOOKMARK_COOKIE}=" in set_cookie
+    assert "SameSite=Lax" in set_cookie
+
+
+def test_bookmark_toggle_off_clears_when_empty(bookmark_client: FlaskClient) -> None:
+    """Toggling the same id twice removes it; when no bookmarks remain the cookie
+    is cleared. The round-trip also confirms the jar resends the server-set
+    JSON cookie (otherwise the second toggle would re-add rather than remove)."""
+    ident = urllib.parse.quote(_BM_ENTRY, safe="")
+    bookmark_client.get(f"/bookmark/entry/{ident}")  # on
+    rv = bookmark_client.get(f"/bookmark/entry/{ident}")  # off
+    set_cookie = rv.headers.get("Set-Cookie", "")
+    assert "Max-Age=0" in set_cookie or "Expires=Thu, 01 Jan 1970" in set_cookie
+
+
+def test_bookmark_invalid_kind_is_404(client: FlaskClient) -> None:
+    """An unrecognized kind is a bad URL, not a silent no-op."""
+    assert client.get("/bookmark/bogus/Whatever").status_code == 404
+
+
+def test_bookmark_blocks_open_redirect(client: FlaskClient) -> None:
+    """A non-local ``next`` is refused — redirect collapses to the index."""
+    ident = urllib.parse.quote(_BM_ENTRY, safe="")
+    rv = client.get(f"/bookmark/entry/{ident}?next=https://evil.example/x")
+    assert rv.status_code == 302
+    assert "evil.example" not in rv.headers["Location"]
+    assert rv.headers["Location"].endswith("/")
+
+
+def test_index_bookmarked_section_renders_for_known_ids(
+    bookmark_client: FlaskClient,
+) -> None:
+    """With an entry and a contract bookmarked, the index renders a `Bookmarked`
+    section and the corresponding row toggles show the filled (is-on) state."""
+    bookmark_client.get(f"/bookmark/entry/{urllib.parse.quote(_BM_ENTRY, safe='')}")
+    bookmark_client.get(f"/bookmark/contract/{_BM_CONTRACT}")
+    body = bookmark_client.get("/").get_data(as_text=True)
+    assert 'class="index-bookmarked"' in body
+    assert ">Bookmarked</h2>" in body
+    assert body.count('class="bookmark-link"') >= 2
+    assert "bookmark-toggle is-on" in body
+
+
+def test_index_ignores_stale_bookmark_ids(bookmark_client: FlaskClient) -> None:
+    """Ids that match nothing in the current analysis are ignored: no section,
+    no error (bookmarks set against a different codebase)."""
+    bookmark_client.get(
+        f"/bookmark/entry/{urllib.parse.quote('Nope.ghost(uint256)', safe='')}"
     )
+    bookmark_client.get("/bookmark/contract/DoesNotExist")
+    body = bookmark_client.get("/").get_data(as_text=True)
+    assert 'class="index-bookmarked"' not in body
+
+
+def test_index_bookmarks_degrade_without_js(bookmark_client: FlaskClient) -> None:
+    """Progressive enhancement: the index loads index.js for in-place toggling,
+    but the bookmark toggles remain real server-side links (a working no-JS
+    fallback) and the Bookmarked section is server-rendered (spec §8.3)."""
+    bookmark_client.get(f"/bookmark/entry/{urllib.parse.quote(_BM_ENTRY, safe='')}")
+    body = bookmark_client.get("/").get_data(as_text=True)
+    assert "js/index.js" in body, "index must load the enhancement script."
+    assert 'class="bookmark-toggle' in body
+    # Every toggle is a server-side link to the /bookmark route (no-JS fallback).
+    assert 'href="/bookmark/' in body
+    assert 'class="index-bookmarked"' in body, "section is server-rendered."
+
+
+def test_flow_page_carries_bookmark_toggle(
+    client: FlaskClient, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """The Flow-page header carries a bookmark toggle for the entry it shows."""
+    url_id = urllib.parse.quote(_BM_ENTRY, safe="")
+    body = client.get(f"/flow/{url_id}").get_data(as_text=True)
+    # The site-header closes first; find the flow-header's own close after it.
+    header_start = body.find('<header class="flow-header">')
+    header = body[header_start : body.find("</header>", header_start)]
+    assert 'class="bookmark-toggle' in header, (
+        "the flow header must carry a bookmark toggle for the current entry "
+        "(v0.15.0 §8.3)."
+    )
+
+
+def test_flow_progressive_back_link_restores_scroll_via_history(
+    client: FlaskClient,
+) -> None:
+    """v0.15.0: the in-app back link reuses history navigation (so the browser
+    restores the index scroll position) when the referrer is the index. pytest
+    can't run the JS; pin the handler shape so a refactor that drops it trips."""
+    js = client.get("/static/js/flow-progressive.js").get_data(as_text=True)
+    assert ".back-link" in js, "the back-link handler must select the link."
+    assert "document.referrer" in js, (
+        "the handler must gate on the referrer so it only intercepts when the "
+        "user arrived from the index (v0.15.0)."
+    )
+    assert "history.back()" in js, (
+        "the handler must call history.back() to reuse the browser's scroll "
+        "restoration instead of a fresh navigation (v0.15.0)."
+    )
+
+
+def test_main_css_bookmark_toggle_uses_tok_number_when_on(
+    client: FlaskClient,
+) -> None:
+    """The filled bookmark reuses the existing --tok-number palette token (no new
+    accent); the outline state uses muted chrome. Pins the color contract."""
+    css = client.get("/static/css/main.css").get_data(as_text=True)
+    start = css.find(".bookmark-toggle.is-on .bookmark-ico {")
+    assert start != -1, "main.css must style the on-state bookmark icon (v0.15.0)."
+    block = css[start : css.find("}", start)]
+    assert "var(--tok-number)" in block, (
+        ".bookmark-toggle.is-on must fill with --tok-number (reused palette "
+        "color, no new accent — v0.15.0 §8.3)."
+    )
+
+
+def test_index_bookmark_jump_shortcut_present_with_count(
+    bookmark_client: FlaskClient,
+) -> None:
+    """v0.15.0 round 2: a persistent shortcut anchors to the Bookmarked section
+    from anywhere, with a server-rendered count. The section carries id=bookmarked."""
+    bookmark_client.get(f"/bookmark/entry/{urllib.parse.quote(_BM_ENTRY, safe='')}")
+    bookmark_client.get(f"/bookmark/contract/{_BM_CONTRACT}")
+    body = bookmark_client.get("/").get_data(as_text=True)
+    assert 'class="bookmark-jump"' in body, "persistent bookmarks shortcut missing."
+    assert 'href="#bookmarked"' in body, "shortcut must anchor to the section."
+    assert 'id="bookmarked"' in body, "Bookmarked section must carry the anchor id."
+    assert (
+        '<span class="bookmark-jump-count">2</span>' in body
+    ), "shortcut must show the server-rendered bookmark count (entry + contract)."
+
+
+def test_index_no_bookmark_jump_without_bookmarks(client: FlaskClient) -> None:
+    """With no bookmarks, neither the shortcut nor the section renders."""
+    body = client.get("/").get_data(as_text=True)
+    assert 'class="bookmark-jump"' not in body
+    assert 'id="bookmarked"' not in body
+
+
+def test_main_css_viewed_row_uses_seen_bg(client: FlaskClient) -> None:
+    """Viewed rows (server-tracked via the solflow_viewed cookie) are tinted with
+    the --seen-bg token, defined in all three palette blocks (light, auto-dark,
+    forced-dark) so it themes correctly."""
+    css = client.get("/static/css/main.css").get_data(as_text=True)
+    start = css.find(".entry-row.viewed .entry-link {")
+    assert start != -1, "main.css must style .entry-row.viewed (v0.15.0 viewed)."
+    block = css[start : css.find("}", start)]
+    assert (
+        "var(--seen-bg)" in block
+    ), ".entry-row.viewed must use --seen-bg (the viewed cue)."
+    assert css.count("--seen-bg:") == 3, (
+        "--seen-bg must be defined in all three palette blocks (light, auto-dark, "
+        "forced-dark) so the viewed tint themes correctly."
+    )
+
+
+def test_flow_page_records_view_in_cookie(
+    client: FlaskClient, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """Opening a Flow page records its entry id in the solflow_viewed cookie."""
+    from solidity_flow_navigator.serve.app import VIEWED_COOKIE
+
+    rv = client.get(f"/flow/{urllib.parse.quote(_BM_ENTRY, safe='')}")
+    assert rv.status_code == 200
+    set_cookie = rv.headers.get("Set-Cookie", "")
+    assert f"{VIEWED_COOKIE}=" in set_cookie, "flow view must set solflow_viewed."
+    assert "SameSite=Lax" in set_cookie
+
+
+def test_index_marks_viewed_row(bookmark_client: FlaskClient) -> None:
+    """After opening a Flow, that entry's row on the index carries the `viewed`
+    class (the cookie round-trips through the client jar)."""
+    enc = urllib.parse.quote(_BM_ENTRY, safe="")
+    bookmark_client.get(f"/flow/{enc}")  # records the view in the cookie jar
+    body = bookmark_client.get("/").get_data(as_text=True)
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", _BM_ENTRY).strip("-")
+    row_id = f'id="e-{slug}"'
+    idx = body.find(row_id)
+    assert idx != -1, "viewed entry row must be present on the index."
+    li_start = body.rfind("<li", 0, idx)
+    assert (
+        "viewed" in body[li_start:idx]
+    ), "the opened entry's row must carry the `viewed` class (v0.15.0)."
+
+
+def test_main_css_anchor_scroll_margin(client: FlaskClient) -> None:
+    """Bookmark redirects land on row/contract anchors with breathing room from
+    the top, not flush against it."""
+    css = client.get("/static/css/main.css").get_data(as_text=True)
+    start = css.find(".entry-row,\n.contract-block {")
+    assert start != -1, "main.css must give anchor targets scroll-margin (v0.15.0)."
+    block = css[start : css.find("}", start)]
+    assert "scroll-margin-top" in block
+
+
+def test_bookmark_toggle_fallback_targets_row(client: FlaskClient) -> None:
+    """The no-JS fallback returns to the clicked row anchor (e-/c-), not the page
+    top — JavaScript intercepts the click for the in-place path, but the link is
+    what runs with JS disabled."""
+    body = client.get("/").get_data(as_text=True)
+    m = re.search(r'<a class="bookmark-toggle[^"]*" href="([^"]+)"', body)
+    assert m is not None, "expected a bookmark toggle on the index."
+    href = m.group(1)
+    assert "/bookmark/" in href, "toggle must hit the /bookmark route."
+    assert (
+        "%23e-" in href or "%23c-" in href
+    ), "fallback next must return to the row anchor (e-/c-), not the top."
+
+
+def test_main_css_smooth_scroll_guarded_by_reduced_motion(client: FlaskClient) -> None:
+    """Anchor navigation glides (scroll-behavior: smooth), only when the user has
+    not requested reduced motion."""
+    css = client.get("/static/css/main.css").get_data(as_text=True)
+    assert "scroll-behavior: smooth" in css
+    assert "prefers-reduced-motion: no-preference" in css
+
+
+def test_index_js_toggles_in_place_and_preserves_scroll(client: FlaskClient) -> None:
+    """index.js intercepts bookmark clicks, persists via fetch, and compensates
+    scroll so the auditor stays put. pytest can't run the JS; pin the shape so a
+    refactor that drops the in-place behavior trips this test."""
+    js = client.get("/static/js/index.js").get_data(as_text=True)
+    assert ".bookmark-toggle" in js, "must intercept bookmark toggle clicks."
+    assert "preventDefault" in js, "must suppress the default navigation."
+    assert "fetch(" in js, "must persist the toggle via fetch (no reload)."
+    assert "scrollBy" in js, "must compensate scroll so the view stays fixed."
+
+
+def test_flow_progressive_toggles_bookmark_in_place(client: FlaskClient) -> None:
+    """The flow page toggles its header bookmark via fetch rather than reloading
+    (a reload would re-run the whole graph layout)."""
+    js = client.get("/static/js/flow-progressive.js").get_data(as_text=True)
+    assert ".flow-nav .bookmark-toggle" in js, "must target the flow header toggle."
+    assert "fetch(" in js, "flow-page bookmark must persist via fetch, not reload."

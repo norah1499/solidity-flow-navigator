@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.parse
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -24,7 +25,15 @@ from pathlib import Path
 from typing import Any
 
 import flask.cli
-from flask import Flask, Response, abort, redirect, render_template, request
+from flask import (
+    Flask,
+    Response,
+    abort,
+    make_response,
+    redirect,
+    render_template,
+    request,
+)
 from markupsafe import Markup
 
 from ..analysis.types import RepoFacts
@@ -262,6 +271,31 @@ THEME_COOKIE = "solflow_theme"
 THEME_VALUES = ("auto", "light", "dark")
 THEME_MAX_AGE = 60 * 60 * 24 * 365  # one year
 
+# v0.15.0 bookmarks (spec §8.3). The per-row / per-heading ribbon toggles hit
+# ``/bookmark/<kind>/<id>``, which adds or removes the id from this first-party,
+# localhost-only cookie. The value is a JSON list of prefixed ids — ``e:<url_id>``
+# for an entry point, ``c:<contract>`` for a contract — read back per request and
+# exposed to templates as ``bookmarked_ids`` (filled vs outline state) and, on the
+# index, materialized into the ``Bookmarked`` section. Like the theme cookie the
+# whole mechanism is server-side, so the index stays JavaScript-free.
+BOOKMARK_COOKIE = "solflow_bookmarks"
+BOOKMARK_MAX_AGE = 60 * 60 * 24 * 365  # one year
+# Defensive ceiling so a runaway cookie can't grow without bound. Browsers cap a
+# single cookie near 4 KB; a few dozen real bookmarks sit comfortably under that,
+# and the cap simply drops the oldest ids past the limit.
+BOOKMARK_MAX = 100
+
+# v0.15.0 "recently viewed" (spec §8.3). Opening a Flow page records its entry id
+# in this cookie; the index renders those rows with a distinct tint so the auditor
+# sees at a glance which entry points they've already opened. Server-side (no JS)
+# and chosen over the browser's `:visited` state because :visited can't be reliably
+# rendered/verified in every browser and its CSS is restricted to a faint wash —
+# this gives a clear, controllable cue. Capped to the most-recent ids to stay well
+# under the ~4 KB cookie limit ("recently viewed", oldest drop off).
+VIEWED_COOKIE = "solflow_viewed"
+VIEWED_MAX_AGE = 60 * 60 * 24 * 365  # one year
+VIEWED_MAX = 60
+
 
 def create_app(
     facts: RepoFacts,
@@ -309,6 +343,22 @@ def create_app(
     }
     groups, total_eps, total_contracts, total_unresolved = build_index(facts, flows)
 
+    # v0.15.0 bookmarks: register the anchor-slug filter the templates use for
+    # row ``id``s and the ``next`` fragment, and build flat lookups so the index
+    # route can materialize the ``Bookmarked`` section (in bookmark order) from
+    # the cookie without re-walking the group tree per id.
+    app.jinja_env.filters["anchor_slug"] = _anchor_slug
+    entry_by_url_id: dict[str, _EntryPointEntry] = {}
+    contract_by_name: dict[str, _ContractEntry] = {}
+    for _group in groups:
+        for _contract in _group.contracts:
+            contract_by_name[_contract.name] = _contract
+            for _ep in (
+                *_contract.mutating_entry_points,
+                *_contract.read_only_entry_points,
+            ):
+                entry_by_url_id[_ep.url_id] = _ep
+
     # Common context for every rendered template.
     @app.context_processor
     def _inject_globals() -> dict[str, Any]:
@@ -319,11 +369,18 @@ def create_app(
         # control. An absent or unrecognized cookie falls back to Auto.
         cookie = request.cookies.get(THEME_COOKIE)
         forced = cookie if cookie in ("light", "dark") else None
+        # v0.15.0: the set of bookmarked ids drives the filled-vs-outline ribbon
+        # state on every contract heading, entry row, and the Flow-page toggle.
+        # A frozenset so templates can do O(1) ``("e:" + url_id) in bookmarked_ids``.
+        bookmarked_ids = frozenset(
+            _parse_bookmarks(request.cookies.get(BOOKMARK_COOKIE))
+        )
         return {
             "repo_path": facts.repo_path,
             "expand_all": expand_all,
             "theme": forced,
             "current_theme": forced or "auto",
+            "bookmarked_ids": bookmarked_ids,
         }
 
     # solflow is a localhost dev tool; an auditor swapping a JS/CSS file mid-
@@ -339,6 +396,23 @@ def create_app(
 
     @app.route("/")
     def index() -> str:
+        # v0.15.0: resolve the cookie's bookmark ids (in bookmark order) against
+        # this analysis. Ids that match nothing in the current repo are skipped,
+        # so bookmarks set against a different codebase neither error nor appear.
+        ids = _parse_bookmarks(request.cookies.get(BOOKMARK_COOKIE))
+        bookmarked_entries = [
+            entry_by_url_id[i[2:]]
+            for i in ids
+            if i.startswith("e:") and i[2:] in entry_by_url_id
+        ]
+        bookmarked_contracts = [
+            contract_by_name[i[2:]]
+            for i in ids
+            if i.startswith("c:") and i[2:] in contract_by_name
+        ]
+        # v0.15.0: ids of entry points opened recently (the Flow route records
+        # them). Used to tint already-viewed rows. A frozenset for O(1) lookup.
+        viewed_ids = frozenset(_parse_viewed(request.cookies.get(VIEWED_COOKIE)))
         return render_template(
             "index.html",
             groups=groups,
@@ -346,6 +420,9 @@ def create_app(
             total_contracts=total_contracts,
             total_unresolved=total_unresolved,
             scope=scope,
+            bookmarked_entries=bookmarked_entries,
+            bookmarked_contracts=bookmarked_contracts,
+            viewed_ids=viewed_ids,
         )
 
     @app.route("/theme/<value>")
@@ -366,18 +443,63 @@ def create_app(
             )
         return response
 
+    @app.route("/bookmark/<kind>/<path:ident>")
+    def toggle_bookmark(kind: str, ident: str) -> Response:
+        # v0.15.0 (spec §8.3). ``kind`` is ``entry`` or ``contract``; anything
+        # else is a bad URL → 404 (never a silent no-op). The id is toggled in
+        # the cookie's JSON list and the route redirects to the originating row
+        # (``next``, validated to a local path by ``_safe_next`` exactly like the
+        # theme route, with the row's fragment anchor so the page returns to it).
+        if kind not in ("entry", "contract"):
+            abort(404)
+        decoded = urllib.parse.unquote(ident)
+        key = ("e:" if kind == "entry" else "c:") + decoded
+        current = _parse_bookmarks(request.cookies.get(BOOKMARK_COOKIE))
+        if key in current:
+            current = [c for c in current if c != key]
+        else:
+            # Append (preserve bookmark order); bound to the last BOOKMARK_MAX.
+            current = (current + [key])[-BOOKMARK_MAX:]
+        response = redirect(_safe_next(request.args.get("next")))
+        if current:
+            response.set_cookie(
+                BOOKMARK_COOKIE,
+                json.dumps(current),
+                max_age=BOOKMARK_MAX_AGE,
+                samesite="Lax",
+            )
+        else:
+            response.delete_cookie(BOOKMARK_COOKIE)
+        return response
+
     @app.route("/flow/<path:url_id>")
-    def flow_page(url_id: str) -> str:
+    def flow_page(url_id: str) -> Response:
         decoded = urllib.parse.unquote(url_id)
         flow = flow_by_url_id.get(decoded)
         if flow is None:
             abort(404)
         flow_dict = serialize_flow(flow)
-        return render_template(
-            "flow.html",
-            flow=flow_dict,
-            flow_json=Markup(_safe_json(flow_dict)),
+        response = make_response(
+            render_template(
+                "flow.html",
+                flow=flow_dict,
+                flow_json=Markup(_safe_json(flow_dict)),
+                # v0.15.0: the entry's url_id keys the flow-header bookmark toggle.
+                entry_url_id=decoded,
+            )
         )
+        # v0.15.0: record this entry as recently viewed (moved to most-recent),
+        # so the index can tint already-opened rows. Server-side, no JS.
+        prior = _parse_viewed(request.cookies.get(VIEWED_COOKIE))
+        viewed = [v for v in prior if v != decoded]
+        viewed = (viewed + [decoded])[-VIEWED_MAX:]
+        response.set_cookie(
+            VIEWED_COOKIE,
+            json.dumps(viewed),
+            max_age=VIEWED_MAX_AGE,
+            samesite="Lax",
+        )
+        return response
 
     # v0.10.4: render 404s in the tool's own chrome instead of Flask's bare
     # default page. Status code stays 404; only the body changes.
@@ -416,6 +538,76 @@ def _safe_next(raw: str | None) -> str:
     if raw and raw.startswith("/") and not raw.startswith("//"):
         return raw
     return "/"
+
+
+def _anchor_slug(value: str) -> str:
+    """Sanitize an id into an HTML-``id`` / URL-fragment safe slug.
+
+    Entry ``url_id``s carry parens and commas (``ERC721.safeTransferFrom(address,
+    ...)``); contract names are plain identifiers. Collapsing every run of
+    non-alphanumerics to a single ``-`` yields a stable, fragment-safe anchor —
+    used both for the row's ``id`` and for the ``next`` fragment the bookmark
+    toggle redirects to, so the page returns to the row rather than the top.
+    Overloaded entries differ in their parameter list, so their slugs differ.
+    Exposed as the ``anchor_slug`` Jinja filter (registered in ``create_app``).
+    """
+    return re.sub(r"[^A-Za-z0-9]+", "-", value).strip("-")
+
+
+def _parse_bookmarks(raw: str | None) -> list[str]:
+    """Decode the ``solflow_bookmarks`` cookie into an ordered id list.
+
+    The cookie holds a JSON array of prefixed ids (``e:`` / ``c:``). Anything
+    malformed — not JSON, not a list, junk entries — degrades to an empty list
+    rather than raising, so a corrupt or hand-edited cookie can never 500 a
+    request. Order (bookmark order) and uniqueness are preserved; the list is
+    capped at ``BOOKMARK_MAX`` so a runaway cookie can't grow without bound.
+    """
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in data:
+        if (
+            isinstance(item, str)
+            and (item.startswith("e:") or item.startswith("c:"))
+            and item not in seen
+        ):
+            seen.add(item)
+            out.append(item)
+            if len(out) >= BOOKMARK_MAX:
+                break
+    return out
+
+
+def _parse_viewed(raw: str | None) -> list[str]:
+    """Decode the ``solflow_viewed`` cookie into an ordered url_id list.
+
+    A JSON array of entry url_ids, oldest first. Malformed input degrades to an
+    empty list (a corrupt cookie never 500s a request). Duplicates are dropped and
+    the list is capped at ``VIEWED_MAX`` ("recently viewed").
+    """
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in data:
+        if isinstance(item, str) and item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out[-VIEWED_MAX:]
 
 
 # ---------------------------------------------------------------------------

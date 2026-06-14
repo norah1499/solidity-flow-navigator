@@ -45,6 +45,11 @@
   --tok-number: #993c1d;
   --tok-comment: #5f5e5a;
 
+  /* v0.15.0: faint wash marking already-viewed entry points on the index
+     (.entry-link:visited). Purple-tinted to evoke the visited-link convention,
+     distinct from the terracotta bookmark accent and the red unresolved family. */
+  --seen-bg: rgba(83, 74, 183, 0.18);
+
   /* Clickable call-site lines inside FunctionNode bodies (§10.2). Tokenized
      (v0.14.0) so a manually-forced Dark theme restyles them too — these
      interaction colors previously lived only in prefers-color-scheme blocks,
@@ -127,6 +132,7 @@
     --tok-string: #a8d18c;
     --tok-number: #d8a081;
     --tok-comment: #8a897f;
+    --seen-bg: rgba(181, 177, 255, 0.22);
 
     --tok-call: #7fb3eb;
     --call-hover-bg: rgba(127, 179, 235, 0.16);
@@ -170,6 +176,7 @@
   --tok-string: #a8d18c;
   --tok-number: #d8a081;
   --tok-comment: #8a897f;
+  --seen-bg: rgba(181, 177, 255, 0.22);
 
   --tok-call: #7fb3eb;
   --call-hover-bg: rgba(127, 179, 235, 0.16);
@@ -181,6 +188,15 @@
 /* ----- reset / base ------------------------------------------------------- */
 
 *, *::before, *::after { box-sizing: border-box; }
+
+/* v0.15.0: smooth-scroll anchor navigation (the fixed bookmarks shortcut, and the
+   post-bookmark redirect to #bookmarked) so it glides rather than jumps. Honored
+   only when the user hasn't asked for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
 
 html, body {
   margin: 0;
@@ -414,6 +430,11 @@ code, pre { font-family: var(--font-mono); }
 .entry-link {
   text-decoration: none;
   color: var(--fg-text);
+  /* v0.15.0: padding + offsetting negative margin give the :visited highlight
+     pill (below) breathing room without shifting row layout. */
+  padding: 1px 4px;
+  margin: -1px -4px;
+  border-radius: 3px;
 }
 
 /* v0.11.0: left-side group holding the signature link plus any modifier
@@ -431,6 +452,117 @@ code, pre { font-family: var(--font-mono); }
    chip for the index row context. */
 .entry-mod-chip {
   flex-shrink: 0;
+}
+
+/* v0.15.0 bookmarks (spec §8.3): a ribbon toggle rendered as a server-side
+   link + inline SVG (no JavaScript). Outline in muted chrome when off; filled
+   with --tok-number when on — the one warm color already in the palette, reused
+   so no new accent enters the UI and it themes via the token's three palette
+   definitions. Red stays reserved for "unresolved". */
+.bookmark-toggle {
+  flex-shrink: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  line-height: 0;
+  text-decoration: none;
+  border-radius: 2px;
+}
+.bookmark-ico {
+  fill: none;
+  stroke: var(--fg-muted);
+  stroke-width: 1.4;
+}
+.bookmark-toggle:hover .bookmark-ico,
+.bookmark-toggle:focus-visible .bookmark-ico {
+  stroke: var(--fg-text);
+}
+.bookmark-toggle.is-on .bookmark-ico {
+  fill: var(--tok-number);
+  stroke: var(--tok-number);
+}
+
+/* v0.15.0 Bookmarked section: sits above the contract groups and shares the
+   group-heading family. A flat list of quick links — contracts to their block
+   anchor, entries to their Flow page — each with its (already-on) toggle to
+   remove the bookmark. */
+.index-bookmarked {
+  margin: 0 0 3rem;
+}
+.bookmark-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 1rem;
+}
+.bookmark-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0.2rem 0;
+}
+.bookmark-link {
+  text-decoration: none;
+  color: var(--fg-text);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.bookmark-kind,
+.bookmark-contract {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+/* v0.15.0 viewed marker (ask: color already-viewed functions). Opening a Flow
+   records its entry id in the solflow_viewed cookie; the index adds the `viewed`
+   class to those rows. Server-side, no JavaScript, fully styleable (chosen over
+   the browser's :visited state, which can't be reliably rendered everywhere and
+   is CSS-restricted to a faint wash). The highlight uses the base .entry-link
+   padding/radius for a neat pill behind the signature. */
+.entry-row.viewed .entry-link {
+  background: var(--seen-bg);
+}
+
+/* v0.15.0 persistent bookmarks shortcut (ask: reach bookmarks from anywhere). A
+   fixed anchor to the #bookmarked section, visible at any scroll position. Plain
+   <a>, server-rendered count — no JavaScript. */
+.bookmark-jump {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  background: var(--bg-surface);
+  border: 0.5px solid var(--border-soft);
+  border-radius: 999px;
+  text-decoration: none;
+  color: var(--fg-muted);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+.bookmark-jump:hover {
+  color: var(--fg-text);
+  border-color: var(--border-strong);
+}
+.bookmark-jump .bookmark-ico {
+  fill: var(--tok-number);
+  stroke: var(--tok-number);
+}
+.bookmark-jump-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* v0.15.0: when the bookmark toggle redirects back to a row/contract anchor, give
+   the target a little breathing room from the page top instead of landing flush. */
+.entry-row,
+.contract-block {
+  scroll-margin-top: 1rem;
 }
 
 /* v0.8.0 per-entry metadata column. `N unr` carries the same red used by
@@ -558,6 +690,10 @@ code, pre { font-family: var(--font-mono); }
 .flow-nav {
   margin: 0;
   flex: 0 0 auto;
+  /* v0.15.0: hold the back-link and the entry bookmark toggle on one row. */
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 .back-link {
   font-size: 12px;

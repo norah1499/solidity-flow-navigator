@@ -3,6 +3,15 @@
 {% block body_class %}index-page{% endblock %}
 
 {% block content %}
+{# v0.15.0 bookmarks (spec §8.3): a ribbon toggle. Each is a real server-side link
+   to /bookmark/<kind>/<id> (works with no JavaScript — the fallback reloads and
+   returns to this row). index.js progressively enhances the click to toggle in
+   place without a reload, so the auditor stays exactly where they are. ``on``
+   picks filled (terracotta) vs outline. #}
+{% macro bookmark_toggle(kind, ident, on) -%}
+{% set anchor = ('e-' if kind == 'entry' else 'c-') ~ (ident | anchor_slug) -%}
+<a class="bookmark-toggle{{ ' is-on' if on }}" href="{{ url_for('toggle_bookmark', kind=kind, ident=ident, next=request.path + '#' + anchor) }}" aria-pressed="{{ 'true' if on else 'false' }}" title="{{ 'Remove bookmark' if on else 'Bookmark' }}" aria-label="{{ 'Remove bookmark' if on else 'Bookmark' }}"><svg class="bookmark-ico" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 2 L12 2 L12 14 L8 10.5 L4 14 Z" stroke-width="1.4" stroke-linejoin="round"/></svg></a>
+{%- endmacro %}
 <header class="index-header">
   <div class="index-header-row">
     <h1 class="index-title">Index</h1>
@@ -61,13 +70,51 @@
   <span class="scope-chrome">max call depth</span>
 </p>
 
+{# v0.15.0 (spec §8.3): the Bookmarked section renders only when the cookie holds
+   ids matching this analysis. Contracts link to their block anchor; entries link
+   to their Flow page. Each carries the same toggle (already "on") to un-bookmark.
+   A fixed shortcut (.bookmark-jump, below) anchors here from anywhere on the page. #}
+{% set bookmark_count = (bookmarked_contracts | length) + (bookmarked_entries | length) %}
+{% if bookmark_count %}
+{# Persistent shortcut: a fixed anchor, visible at any scroll position, that jumps
+   to the Bookmarked section. Server-rendered count; plain <a>, no JavaScript. #}
+<a class="bookmark-jump" href="#bookmarked" title="Jump to bookmarks" aria-label="Jump to {{ bookmark_count }} bookmark{{ 's' if bookmark_count != 1 }}">
+  <svg class="bookmark-ico" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 2 L12 2 L12 14 L8 10.5 L4 14 Z" stroke-width="1.4" stroke-linejoin="round"/></svg>
+  <span class="bookmark-jump-count">{{ bookmark_count }}</span>
+</a>
+<section class="index-bookmarked" id="bookmarked" aria-label="Bookmarked">
+  <h2 class="group-heading">Bookmarked</h2>
+  <ul class="bookmark-list">
+    {% for contract in bookmarked_contracts %}
+    <li class="bookmark-item">
+      {{ bookmark_toggle('contract', contract.name, true) }}
+      <a class="bookmark-link" href="#c-{{ contract.name | anchor_slug }}">
+        <span class="bookmark-kind">contract</span>
+        <code class="src">{{ contract.name }}</code>
+      </a>
+    </li>
+    {% endfor %}
+    {% for ep in bookmarked_entries %}
+    <li class="bookmark-item">
+      {{ bookmark_toggle('entry', ep.url_id, true) }}
+      <a class="bookmark-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
+        <span class="bookmark-contract">{{ ep.contract_name }}</span>
+        <code class="src">{{ ep.signature_html | safe }}</code>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
 {% for group in groups %}
   {% if group.contracts %}
   <section class="index-group">
     <h2 class="group-heading">{{ group.label }}</h2>
     {% for contract in group.contracts %}
-    <article class="contract-block">
+    <article class="contract-block" id="c-{{ contract.name | anchor_slug }}">
       <h3 class="contract-name">
+        {{ bookmark_toggle('contract', contract.name, ('c:' + contract.name) in bookmarked_ids) }}
         {{ contract.name }}
         <span class="contract-path">{{ contract.source_path }}</span>
       </h3>
@@ -76,11 +123,12 @@
         <h4 class="section-heading">Mutating · {{ contract.mutating_count }}</h4>
         <ul class="entry-list">
           {% for ep in contract.mutating_entry_points %}
-          <li class="entry-row">
+          <li class="entry-row{{ ' viewed' if ep.url_id in viewed_ids }}" id="e-{{ ep.url_id | anchor_slug }}">
             {# v0.11.0 (spec §8.3): no Contract. prefix — the block heading
                names the contract; modifier chips render on mutating rows
                only (no chips = unprotected mutating entry point). #}
             <span class="entry-main">
+              {{ bookmark_toggle('entry', ep.url_id, ('e:' + ep.url_id) in bookmarked_ids) }}
               <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
                 <code class="src">{{ ep.signature_html | safe }}</code>
               </a>
@@ -105,10 +153,11 @@
         <h4 class="section-heading">Read-only · {{ contract.read_only_count }}</h4>
         <ul class="entry-list">
           {% for ep in contract.read_only_entry_points %}
-          <li class="entry-row">
+          <li class="entry-row{{ ' viewed' if ep.url_id in viewed_ids }}" id="e-{{ ep.url_id | anchor_slug }}">
             {# v0.11.0: read-only rows carry no modifier chips (deliberate
                asymmetry, spec §8.3) but share the entry-main wrapper. #}
             <span class="entry-main">
+              {{ bookmark_toggle('entry', ep.url_id, ('e:' + ep.url_id) in bookmarked_ids) }}
               <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
                 <code class="src">{{ ep.signature_html | safe }}</code>
               </a>
@@ -132,4 +181,11 @@
 {% endfor %}
 
 <p class="privacy-footer">All analysis local · code never uploaded · server bound to 127.0.0.1 · <a class="source-link" href="https://github.com/norah1499/solidity-flow-navigator">source</a></p>
+{% endblock %}
+
+{# v0.15.0: progressive enhancement — bookmark toggles work as plain links above;
+   this script intercepts them to toggle in place (no reload), so the auditor's
+   scroll position is preserved (spec §8.3). #}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/index.js') }}" defer></script>
 {% endblock %}

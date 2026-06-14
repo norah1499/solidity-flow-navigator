@@ -13,6 +13,11 @@
 <header class="flow-header">
   <nav class="flow-nav">
     <a class="back-link" href="{{ url_for('index') }}">&larr; index</a>
+    {# v0.15.0 bookmarks (spec §8.3): toggle the entry this page shows. Server-side
+       link + inline SVG, no JavaScript; redirects back to this page. The macro
+       lives in index.html, so the markup is inlined here. #}
+    {% set bookmarked = ('e:' + entry_url_id) in bookmarked_ids %}
+    <a class="bookmark-toggle{{ ' is-on' if bookmarked }}" href="{{ url_for('toggle_bookmark', kind='entry', ident=entry_url_id, next=request.path) }}" aria-pressed="{{ 'true' if bookmarked else 'false' }}" title="{{ 'Remove bookmark' if bookmarked else 'Bookmark this entry point' }}" aria-label="{{ 'Remove bookmark' if bookmarked else 'Bookmark this entry point' }}"><svg class="bookmark-ico" viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 2 L12 2 L12 14 L8 10.5 L4 14 Z" stroke-width="1.4" stroke-linejoin="round"/></svg></a>
   </nav>
   <div class="flow-header-text">
     <h1 class="flow-title">

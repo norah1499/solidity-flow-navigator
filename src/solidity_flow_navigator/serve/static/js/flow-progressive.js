@@ -1641,4 +1641,57 @@
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
     applyFit(true);
   });
+
+  // v0.15.0: make the in-app "← index" link restore scroll position like the
+  // browser's own Back button. A plain <a href="/"> does a fresh load that
+  // renders the index at the top, losing the auditor's place; a history
+  // navigation instead reuses the per-entry scroll position the browser saved.
+  // When this flow page was reached FROM the index, route a plain left-click
+  // through history.back() so that saved scroll is restored. Anything else —
+  // a direct load / new-tab open (no index in history), a modified click
+  // (open-in-new-tab), or a non-index referrer — falls through to the normal
+  // href navigation. This handler lives only on the flow page; the index stays
+  // JavaScript-free (spec §8.3).
+  const backLink = document.querySelector(".back-link");
+  if (backLink) {
+    backLink.addEventListener("click", (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      let cameFromIndex = false;
+      try {
+        const ref = new URL(document.referrer);
+        cameFromIndex =
+          ref.origin === window.location.origin && ref.pathname === "/";
+      } catch (_err) {
+        cameFromIndex = false;
+      }
+      if (cameFromIndex && window.history.length > 1) {
+        e.preventDefault();
+        window.history.back();
+      }
+    });
+  }
+
+  // v0.15.0: toggle the entry's bookmark in place rather than reloading the flow
+  // page (a reload would re-run the entire dagre layout). The toggle is a plain
+  // server-side link (no-JS fallback); here we persist via fetch and flip the
+  // icon, leaving the graph untouched.
+  const bookmarkToggle = document.querySelector(".flow-nav .bookmark-toggle");
+  if (bookmarkToggle) {
+    bookmarkToggle.addEventListener("click", (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      const on = !bookmarkToggle.classList.contains("is-on");
+      fetch(bookmarkToggle.href, { credentials: "same-origin" })
+        .then(() => {
+          bookmarkToggle.classList.toggle("is-on", on);
+          bookmarkToggle.setAttribute("aria-pressed", on ? "true" : "false");
+          const label = on ? "Remove bookmark" : "Bookmark this entry point";
+          bookmarkToggle.setAttribute("title", label);
+          bookmarkToggle.setAttribute("aria-label", label);
+        })
+        .catch(() => {
+          window.location.href = bookmarkToggle.href;
+        });
+    });
+  }
 })();
