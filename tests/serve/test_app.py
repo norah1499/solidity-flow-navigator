@@ -1834,3 +1834,141 @@ def test_flow_progressive_toggles_bookmark_in_place(client: FlaskClient) -> None
     js = client.get("/static/js/flow-progressive.js").get_data(as_text=True)
     assert ".flow-nav .bookmark-toggle" in js, "must target the flow header toggle."
     assert "fetch(" in js, "flow-page bookmark must persist via fetch, not reload."
+
+
+# ----- v0.16.0 Feature 1: per-flow Expand all / Collapse all (spec §10.2) ----
+
+
+def test_flow_page_has_expand_collapse_controls(
+    client: FlaskClient, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """The flow header carries whole-tree Expand all / Collapse all controls plus
+    the relocated Reset view, grouped in .flow-controls at the right of the header
+    (v0.16.0, spec §10.2). They are <button>s, not links — the graph is
+    JS-rendered, so there is no no-JS fallback to preserve."""
+    target = next(
+        f
+        for f in solmate_flows
+        if f.entry_point_invoker_canonical_name == "ERC4626.deposit(uint256,address)"
+    )
+    body = client.get(f"/flow/{target.entry_point_invoker_canonical_name}").get_data(
+        as_text=True
+    )
+    assert (
+        'id="expand-all-btn"' in body
+    ), "flow header must carry the Expand all control."
+    assert (
+        'id="collapse-all-btn"' in body
+    ), "flow header must carry the Collapse all control."
+    assert "Expand all" in body and "Collapse all" in body
+    # Buttons, not links (no href, type=button).
+    assert '<button class="flow-control" id="expand-all-btn" type="button"' in body
+    # v0.16.0: the three controls are grouped in .flow-controls, and Reset view
+    # moved out of #graph-frame into that group (id preserved for the JS wiring).
+    start = body.find('class="flow-controls"')
+    assert start != -1, "controls must be grouped in .flow-controls (right of header)."
+    group = body[start : body.find("</div>", start)]
+    for ctrl in ('id="expand-all-btn"', 'id="collapse-all-btn"', 'id="reset-view"'):
+        assert ctrl in group, f"{ctrl} must live in the .flow-controls group."
+    # Reset view is no longer a floating button inside the graph frame.
+    frame_start = body.find('id="graph-frame"')
+    assert (
+        'id="reset-view"' not in body[frame_start:]
+    ), "Reset view must be in the header group, not inside #graph-frame."
+
+
+def test_flow_progressive_wires_expand_collapse_all(client: FlaskClient) -> None:
+    """v0.16.0 (spec §10.2): the renderer wires the whole-tree controls and the
+    e / c keyboard shortcuts. pytest can't run the JS; pin the handler shape so a
+    refactor that drops it trips this test."""
+    js = client.get("/static/js/flow-progressive.js").get_data(as_text=True)
+    assert (
+        "expand-all-btn" in js and "collapse-all-btn" in js
+    ), "must wire both header buttons by id."
+    assert "function expandAll(" in js and "function collapseAll(" in js
+    # Expand all reuses the existing recursive expander + the expand-all balancing.
+    assert "expandAllRecursive(flow.root.__id)" in js
+    # e / c keyboard shortcuts alongside the existing R / 0 fit keys.
+    assert '=== "e"' in js and '=== "c"' in js, "must bind the e / c shortcut keys."
+
+
+# ----- v0.16.0 Feature 3: persisted per-flow expansion state (spec §10.2) -----
+
+
+def test_flow_data_carries_flow_id(
+    client: FlaskClient, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """v0.16.0 (spec §10.2): #flow-data carries data-flow-id (the entry url id) so
+    the renderer can key persisted expansion state per Flow."""
+    target = next(
+        f
+        for f in solmate_flows
+        if f.entry_point_invoker_canonical_name == "ERC4626.deposit(uint256,address)"
+    )
+    body = client.get(f"/flow/{target.entry_point_invoker_canonical_name}").get_data(
+        as_text=True
+    )
+    assert (
+        'data-flow-id="ERC4626.deposit(' in body
+    ), "#flow-data must expose the entry url id as data-flow-id (v0.16.0)."
+
+
+def test_flow_progressive_persists_expansion_to_localstorage(
+    client: FlaskClient,
+) -> None:
+    """v0.16.0 (spec §10.2 'Persisted expansion state'): the renderer remembers
+    expanded call sites per Flow in localStorage and restores them on the default
+    initial-render path. pytest can't run the JS; pin the shape."""
+    js = client.get("/static/js/flow-progressive.js").get_data(as_text=True)
+    assert "localStorage" in js, "expansion state must persist to localStorage."
+    assert "solflow:expanded:" in js, "the storage key must be namespaced per Flow."
+    assert "function persistExpansion(" in js and "function restoreExpansion(" in js
+    assert "dataset.flowId" in js, "the key must read data-flow-id (the entry url id)."
+    assert "restoreExpansion()" in js, "must restore on init."
+
+
+# ----- v0.16.0 Feature 2: index filter (spec §8.3) ---------------------------
+
+
+def test_index_has_filter_box(client: FlaskClient) -> None:
+    """v0.16.0 (spec §8.3): the index carries a filter box, server-rendered but
+    `hidden` so no-JS users never see a dead control (index.js reveals it). Contract
+    blocks carry a clean data-name for contract-name matching."""
+    body = client.get("/").get_data(as_text=True)
+    assert 'id="entry-filter"' in body, "index must carry the filter input."
+    start = body.find('class="index-filter"')
+    assert start != -1, "filter container must be present."
+    container = body[start : body.find(">", start) + 1]
+    assert "hidden" in container, "the filter box must be hidden for the no-JS path."
+    assert 'data-name="ERC4626"' in body, "contract blocks must carry data-name."
+
+
+def test_index_js_filters_entry_rows(client: FlaskClient) -> None:
+    """index.js implements the filter (an input listener that narrows .entry-row by
+    signature/contract name and reveals the box); the index stays free of inline
+    scripts (spec §8.3)."""
+    body = client.get("/").get_data(as_text=True)
+    assert "<script>" not in body, "the filter adds no inline script (spec §8.3)."
+    js = client.get("/static/js/index.js").get_data(as_text=True)
+    assert "entry-filter" in js, "index.js must wire the filter input."
+    assert (
+        "applyFilter" in js and "initFilter" in js
+    ), "must implement + reveal the filter."
+    assert ".entry-row" in js, "must narrow the entry rows."
+    assert "data-name" in js, "must match against the contract name too."
+    # The filter must hide rows via inline display, NOT the `hidden` attribute:
+    # `.entry-row { display: flex }` overrides the UA `[hidden]` rule, so a hidden
+    # attribute would leave rows visible (the v0.16.0 filter bug).
+    assert (
+        "style.display" in js
+    ), "rows must be hidden via inline display, not [hidden]."
+
+
+def test_main_css_filter_hidden_for_no_js(client: FlaskClient) -> None:
+    """The filter's `display` is scoped to :not([hidden]) so the UA
+    `[hidden] { display: none }` rule still wins for no-JS users — a bare
+    `.index-filter { display: flex }` would override it and leak the dead box."""
+    css = client.get("/static/css/main.css").get_data(as_text=True)
+    assert (
+        ".index-filter:not([hidden])" in css
+    ), "filter display must be gated on :not([hidden]) so it stays hidden with JS off."

@@ -442,13 +442,78 @@
   // handles all positioning. Terminal nodes (external, unresolved) carry no
   // children, so recursion stops naturally there.
   function expandAllRecursive(id) {
-    if (visibleIds.has(id)) return; // idempotent
-    showNode(id);
+    // Show this node if it isn't already, then ALWAYS recurse into its children.
+    // The recurse-even-when-visible behavior matters for the v0.16.0 "Expand all"
+    // control, which runs from a partially-expanded tree (the root is already
+    // visible): a guard that returned early on a visible node would stop before
+    // reaching the hidden descendants. At init (the --expand-all path) nothing is
+    // visible yet, so this is byte-identical to the prior guarded version.
     const node = nodesById.get(id);
+    if (!visibleIds.has(id)) showNode(id);
     if (node.node_type !== "function") return;
     (node.children || []).forEach((c) => {
       expandAllRecursive(c.__id);
     });
+  }
+
+  // ----- v0.16.0 persisted expansion state (spec §10.2) -------------------
+  //
+  // Remember which call sites are expanded, per-Flow, in localStorage so that
+  // returning to a Flow restores them. Stored as the full visible set minus the
+  // root. A per-browser, client-side view convenience only — distinct from the
+  // server-cookie bookmarks/viewed markers; carries no analysis meaning. The key
+  // is the entry's url id (data-flow-id on #flow-data), falling back to the path.
+  const STORAGE_KEY =
+    "solflow:expanded:" + (dataEl.dataset.flowId || location.pathname);
+
+  function persistExpansion() {
+    try {
+      const ids = [];
+      visibleIds.forEach((id) => {
+        if (id !== flow.root.__id) ids.push(id);
+      });
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+    } catch (_err) {
+      // localStorage unavailable (private mode, quota, disabled) — persistence
+      // is a convenience and must never break interaction.
+    }
+  }
+
+  // Re-show the call sites a prior visit saved. Returns true if any node beyond
+  // the default implicit set was restored, so the caller can run the expand-all
+  // side-balancing. Graceful: stale ids (source changed) and orphans whose
+  // parent was not restored are skipped, and unreadable storage is a no-op.
+  function restoreExpansion() {
+    let raw;
+    try {
+      raw = window.localStorage.getItem(STORAGE_KEY);
+    } catch (_err) {
+      return false;
+    }
+    if (!raw) return false;
+    let saved;
+    try {
+      saved = JSON.parse(raw);
+    } catch (_err) {
+      return false;
+    }
+    if (!Array.isArray(saved)) return false;
+    // Ancestor-first (shallower ids before deeper) so a node's parent is already
+    // visible when we show it. ID depth = number of "/" segments.
+    saved.sort(
+      (a, b) => String(a).split("/").length - String(b).split("/").length,
+    );
+    let restored = false;
+    saved.forEach((id) => {
+      if (typeof id !== "string") return;
+      if (visibleIds.has(id)) return;
+      if (!nodesById.has(id)) return; // stale id — source changed
+      const parent = parentIdOf(id);
+      if (parent && !visibleIds.has(parent)) return; // orphan — parent not restored
+      showNode(id);
+      restored = true;
+    });
+    return restored;
   }
 
   // ----- v0.10.0 Stage 1c (spec §10.3 "Expand-all balancing") -------------
@@ -737,6 +802,7 @@
       layoutBox = relayout(snapshot);
       panNewNodesIntoView(fresh);
     }
+    persistExpansion(); // v0.16.0: remember this expansion across visits
   });
 
   // Edge-click delegation lives further down, after `edgesGroup` is
@@ -840,6 +906,7 @@
     collapse(childId);
     refreshExpandedLineState();
     layoutBox = relayout(snapshot);
+    persistExpansion(); // v0.16.0: remember this collapse across visits
   });
 
   const line = d3
@@ -1626,6 +1693,15 @@
     applyBalancedSides(balanced);
   } else {
     expandImplicit(flow.root.__id);
+    // v0.16.0 (spec §10.2 "Persisted expansion state"): restore the auditor's
+    // saved expansion. If anything was restored, balance first-level sides the
+    // same way --expand-all does — otherwise restored first-level branches pile
+    // on the right against an empty lastNodeRects, exactly the Stage 1c case.
+    if (restoreExpansion()) {
+      const extents = measureFirstLevelExtents();
+      const balanced = balanceFirstLevelSides(extents);
+      applyBalancedSides(balanced);
+    }
   }
   let layoutBox = relayout(null);
   applyFit(false);
@@ -1634,12 +1710,60 @@
     resetButton.addEventListener("click", () => applyFit(true));
   }
 
+  // v0.16.0 (spec §10.2 "Expand-all / collapse-all controls"): whole-tree
+  // controls in the flow header, a convenience over per-call-site clicks. Both
+  // persist the resulting expansion (spec "Persisted expansion state").
+  function expandAll() {
+    if (EXPAND_ALL && visibleIds.size === nodesById.size) {
+      applyFit(true); // already fully expanded — just re-fit
+      return;
+    }
+    const snapshot = snapshotPositions();
+    expandAllRecursive(flow.root.__id);
+    const extents = measureFirstLevelExtents();
+    const balanced = balanceFirstLevelSides(extents);
+    applyBalancedSides(balanced);
+    refreshExpandedLineState();
+    layoutBox = relayout(snapshot);
+    applyFit(true);
+    persistExpansion();
+  }
+
+  function collapseAll() {
+    const snapshot = snapshotPositions();
+    // Collapse every first-level non-modifier child of the root; the root and
+    // its auto-rendered modifier subtrees remain — the default first-load state.
+    const rootId = flow.root.__id;
+    const targets = [];
+    visibleIds.forEach((id) => {
+      if (parentIdOf(id) === rootId && !isModifierNode(nodesById.get(id))) {
+        targets.push(id);
+      }
+    });
+    targets.forEach((id) => collapse(id));
+    refreshExpandedLineState();
+    layoutBox = relayout(snapshot);
+    applyFit(true);
+    persistExpansion();
+  }
+
+  const expandAllBtn = document.getElementById("expand-all-btn");
+  if (expandAllBtn) expandAllBtn.addEventListener("click", expandAll);
+  const collapseAllBtn = document.getElementById("collapse-all-btn");
+  if (collapseAllBtn) collapseAllBtn.addEventListener("click", collapseAll);
+
   window.addEventListener("keydown", (e) => {
-    if (e.key !== "0" && e.key !== "r" && e.key !== "R") return;
+    const k = e.key;
+    const isFit = k === "0" || k === "r" || k === "R";
+    const isExpand = k === "e" || k === "E";
+    const isCollapse = k === "c" || k === "C";
+    if (!isFit && !isExpand && !isCollapse) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-    applyFit(true);
+    if (isExpand) expandAll();
+    else if (isCollapse) collapseAll();
+    else applyFit(true);
   });
 
   // v0.15.0: make the in-app "← index" link restore scroll position like the

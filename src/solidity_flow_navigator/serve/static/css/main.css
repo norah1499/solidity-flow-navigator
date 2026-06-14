@@ -248,16 +248,18 @@ code, pre { font-family: var(--font-mono); }
   margin-left: auto;
   align-self: center;
   display: inline-flex;
-  border: 0.5px solid var(--border-soft);
+  border: 1px solid var(--border-strong);
   border-radius: 3px;
   overflow: hidden;
-  font-size: 11px;
+  /* v0.16.0: a step bigger / more striking for visibility, matching the flow
+     header controls. */
+  font-size: 12px;
 }
 .theme-seg {
-  padding: 0.2rem 0.5rem;
+  padding: 0.3rem 0.6rem;
   color: var(--fg-muted);
   text-decoration: none;
-  border-left: 0.5px solid var(--border-soft);
+  border-left: 1px solid var(--border-strong);
 }
 .theme-seg:first-child { border-left: 0; }
 .theme-seg:hover { color: var(--fg-text); }
@@ -278,6 +280,55 @@ code, pre { font-family: var(--font-mono); }
    right-aligned count widgets. Replaces the v0.7.0 `.index-summary` line. */
 .index-header {
   margin: 0 0 1rem;
+}
+
+/* v0.16.0 index filter (spec §8.3): a text box that narrows the listing below.
+   The box is server-rendered but carries the `hidden` attribute; index.js
+   removes it on load. `display` is scoped to :not([hidden]) so the UA
+   `[hidden] { display: none }` rule still wins for no-JS users — an author
+   `display: flex` on the bare selector would override it and leak the box. */
+.index-filter {
+  margin: 0 0 1rem;
+  align-items: center;
+  gap: 0.5rem;
+}
+.index-filter:not([hidden]) {
+  display: flex;
+}
+.index-filter-input {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-text);
+  background: var(--bg-surface);
+  border: 0.5px solid var(--border-soft);
+  border-radius: 2px;
+  padding: 0.35rem 0.6rem;
+  width: 22rem;
+  max-width: 100%;
+}
+.index-filter-input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
+.index-filter-clear {
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--fg-muted);
+  background: var(--bg-surface);
+  border: 0.5px solid var(--border-soft);
+  border-radius: 2px;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+}
+.index-filter-clear:hover {
+  color: var(--fg-text);
+  border-color: var(--border-strong);
+}
+.index-filter-count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
 }
 
 .index-header-row {
@@ -480,6 +531,17 @@ code, pre { font-family: var(--font-mono); }
 .bookmark-toggle.is-on .bookmark-ico {
   fill: var(--tok-number);
   stroke: var(--tok-number);
+}
+/* v0.16.0: scale the flow-header bookmark toggle up so it reads in proportion
+   with the enlarged header controls (← index / Expand all / etc.). The CSS size
+   overrides the SVG's 13px width/height attribute; index-row toggles keep their
+   smaller row-sized default. */
+.flow-nav .bookmark-ico {
+  width: 18px;
+  height: 18px;
+}
+.flow-nav .bookmark-toggle {
+  padding: 0.15rem;
 }
 
 /* v0.15.0 Bookmarked section: sits above the contract groups and shares the
@@ -695,28 +757,50 @@ code, pre { font-family: var(--font-mono); }
   align-items: center;
   gap: 0.5rem;
 }
-.back-link {
-  font-size: 12px;
-  color: var(--fg-muted);
+/* v0.16.0: the header affordances (← index, Expand/Collapse all, Reset view)
+   share one chrome. Bumped a step bigger and more striking than the v0.15
+   chrome for visibility: default-text label, full-weight border, and an
+   inverted hover/active (matching the theme toggle's active segment). */
+.back-link,
+.flow-control {
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--fg-text);
   text-decoration: none;
   background: var(--bg-surface);
-  border: 0.5px solid var(--border-soft);
-  border-radius: 2px;
-  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 0.4rem 0.75rem;
   display: inline-block;
+  cursor: pointer;
 }
-.back-link:hover {
-  color: var(--fg-text);
-  border-color: var(--border-strong);
+.back-link:hover,
+.flow-control:hover {
+  color: var(--bg-surface);
+  background: var(--fg-text);
+  border-color: var(--fg-text);
 }
 
 .flow-header {
   margin: 0 0 1.5rem;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 1rem;
 }
-.flow-header-text { min-width: 0; }
+/* The title fills the middle so the .flow-controls group pins to the right,
+   directly under the theme toggle in the site header. */
+.flow-header-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+/* v0.16.0 (spec §10.2): whole-tree controls + Reset view, right-aligned. */
+.flow-controls {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
 .flow-title {
   font-size: 16px;
   font-weight: 500;
@@ -826,20 +910,9 @@ body.flow-page .flow-header {
 #nodes { position: absolute; top: 0; left: 0; }
 #nodes .node { position: absolute; }
 
-#reset-view {
-  position: absolute;
-  top: 1rem;
-  right: 1rem;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  padding: 0.35rem 0.6rem;
-  background: var(--bg-surface);
-  color: var(--fg-text);
-  border: 0.5px solid var(--border-soft);
-  border-radius: 2px;
-  cursor: pointer;
-}
-#reset-view:hover { border-color: var(--border-strong); }
+/* v0.16.0: #reset-view moved from a floating button inside #graph-frame into
+   the header's .flow-controls group (styled by .flow-control above). This also
+   resolves the long-standing reset-button-over-node overlap. */
 
 /* ----- nodes (used by both the graph and any static fallback) ---------- */
 

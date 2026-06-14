@@ -32,6 +32,16 @@
       </p>
     {% endif %}
   </div>
+  {# v0.16.0 (spec §10.2): whole-tree controls + the Reset-view fit control,
+     grouped at the right of the header (below the theme toggle). Buttons, not
+     links — they drive the JS-rendered graph and have no no-JS fallback (neither
+     does the graph). flow-progressive.js wires Expand/Collapse (and the e / c
+     keys) and Reset view (#reset-view, the R / 0 keys). #}
+  <div class="flow-controls">
+    <button class="flow-control" id="expand-all-btn" type="button" title="Expand the whole call tree (shortcut: e)">Expand all</button>
+    <button class="flow-control" id="collapse-all-btn" type="button" title="Collapse back to the root (shortcut: c)">Collapse all</button>
+    <button class="flow-control" id="reset-view" type="button" title="Fit the whole tree in view (shortcut: R or 0)">Reset view</button>
+  </div>
 </header>
 
 {# Stage 3 graph layout. Flow data is embedded inline; flow.js builds the
@@ -39,7 +49,7 @@
    The ``data-expand-all`` attribute is the v0.10.0 toggle (spec §10.2): the
    progressive renderer reads it on init and, when "true", expands every
    call site recursively before the first layout pass. #}
-<script type="application/json" id="flow-data" data-expand-all="{{ 'true' if expand_all else 'false' }}">{{ flow_json | safe }}</script>
+<script type="application/json" id="flow-data" data-expand-all="{{ 'true' if expand_all else 'false' }}" data-flow-id="{{ entry_url_id }}">{{ flow_json | safe }}</script>
 
 <div id="graph-frame" tabindex="0">
   <div id="graph">
@@ -53,7 +63,6 @@
     </svg>
     <div id="nodes"></div>
   </div>
-  <button id="reset-view" type="button" title="Fit the whole tree in view (shortcut: R or 0)">Reset view</button>
 </div>
 {% endblock %}
 

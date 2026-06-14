@@ -99,4 +99,76 @@
   }
 
   document.addEventListener("click", onClick);
+
+  // ----- v0.16.0 index filter (spec §8.3) --------------------------------
+  //
+  // Narrow the visible entry points as the auditor types — a case-insensitive
+  // substring match against each entry's function signature and its contract
+  // name. The filter box is server-rendered but `hidden`; this script reveals it,
+  // so with JavaScript disabled the box never appears and the full, server-
+  // rendered listing stays usable. Scoped to `.index-group`, so the pinned
+  // Bookmarked section above is left unfiltered.
+  function applyFilter(query) {
+    var q = query.trim().toLowerCase();
+    var shown = 0;
+    document.querySelectorAll(".index-group .entry-row").forEach(function (row) {
+      var match = !q;
+      if (q) {
+        var code = row.querySelector(".entry-link code.src");
+        var sig = (code ? code.textContent : "").toLowerCase();
+        var block = row.closest(".contract-block");
+        var name = (block ? block.getAttribute("data-name") || "" : "").toLowerCase();
+        match = sig.indexOf(q) !== -1 || name.indexOf(q) !== -1;
+      }
+      // Toggle INLINE display, not the `hidden` attribute: .entry-row carries
+      // `display: flex`, an author rule that overrides the UA `[hidden] {
+      // display: none }` rule, so a hidden attribute would not actually hide the
+      // row (it stays flex). An inline style wins over the stylesheet.
+      row.style.display = match ? "" : "none";
+      if (match) shown += 1;
+    });
+    // A section / contract / group is visible iff it still holds a visible row;
+    // an empty query restores everything (display: "" reverts to the stylesheet).
+    function hasVisibleRow(container) {
+      var rows = container.querySelectorAll(".entry-row");
+      for (var i = 0; i < rows.length; i += 1) {
+        if (rows[i].style.display !== "none") return true;
+      }
+      return false;
+    }
+    document.querySelectorAll(".index-group .entry-section").forEach(function (sec) {
+      sec.style.display = !q || hasVisibleRow(sec) ? "" : "none";
+    });
+    document.querySelectorAll(".index-group .contract-block").forEach(function (block) {
+      block.style.display = !q || hasVisibleRow(block) ? "" : "none";
+    });
+    document.querySelectorAll(".index-group").forEach(function (group) {
+      group.style.display = !q || hasVisibleRow(group) ? "" : "none";
+    });
+    var count = document.getElementById("entry-filter-count");
+    if (count) count.textContent = q ? shown + " shown" : "";
+  }
+
+  function initFilter() {
+    var box = document.querySelector(".index-filter");
+    if (!box) return;
+    box.hidden = false; // reveal the control (no-JS users never see it)
+    var input = document.getElementById("entry-filter");
+    var clear = document.getElementById("entry-filter-clear");
+    if (input) {
+      input.addEventListener("input", function () {
+        applyFilter(input.value);
+      });
+    }
+    if (input && clear) {
+      clear.addEventListener("click", function () {
+        input.value = "";
+        applyFilter("");
+        input.focus();
+      });
+    }
+  }
+
+  // The script is defer-loaded, so the DOM is parsed by the time this runs.
+  initFilter();
 })();

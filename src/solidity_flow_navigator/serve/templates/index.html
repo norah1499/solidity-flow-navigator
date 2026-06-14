@@ -36,6 +36,16 @@
   </div>
 </header>
 
+{# v0.16.0 (spec §8.3): filter box. Server-rendered but `hidden` so no-JS users
+   never see a dead control; index.js reveals it on load and narrows the listing
+   below as the auditor types. The complete listing is always present server-side,
+   and the Bookmarked section above stays pinned (unfiltered). #}
+<div class="index-filter" hidden>
+  <input class="index-filter-input" id="entry-filter" type="text" autocomplete="off" spellcheck="false" placeholder="Filter entry points…" aria-label="Filter entry points by signature or contract name">
+  <button class="index-filter-clear" id="entry-filter-clear" type="button" aria-label="Clear filter" title="Clear filter">&times;</button>
+  <span class="index-filter-count" id="entry-filter-count" aria-live="polite"></span>
+</div>
+
 <p class="index-scope">
   <span class="scope-chrome">Scope</span>
   <span class="scope-chrome">·</span>
@@ -112,7 +122,7 @@
   <section class="index-group">
     <h2 class="group-heading">{{ group.label }}</h2>
     {% for contract in group.contracts %}
-    <article class="contract-block" id="c-{{ contract.name | anchor_slug }}">
+    <article class="contract-block" id="c-{{ contract.name | anchor_slug }}" data-name="{{ contract.name }}">
       <h3 class="contract-name">
         {{ bookmark_toggle('contract', contract.name, ('c:' + contract.name) in bookmarked_ids) }}
         {{ contract.name }}
