@@ -5,6 +5,19 @@
    ========================================================================== */
 
 :root {
+  /* web-interface-guidelines polish: declare the light color scheme so native
+     UI (scrollbars, the index filter <input>) tracks the palette; the dark
+     blocks below flip it to dark. --focus-ring aliases the themed ink-blue
+     accent for keyboard focus rings (resolved at use time, so one definition
+     themes both modes — it is an outline color, never text). */
+  color-scheme: light;
+  --focus-ring: var(--node-mod-border);
+
+  /* Text-selection tint (light). Reuses the hyperlink-blue accent family so no
+     new hue enters the palette; background-only, so selected text keeps its
+     resting color. Themed per palette in the dark blocks below. */
+  --selection-bg: rgba(58, 109, 176, 0.18);
+
   /* Page chrome */
   --bg-page: #f7f5ee;
   --bg-surface: #fdfcf7;
@@ -97,6 +110,7 @@
        panel advances while the cool canvas recedes — the temperature split
        reinforces the editor-window-on-desktop depth. Light mode stays warm
        cream; this is a deliberate warm-light / cool-dark pairing. */
+    color-scheme: dark;        /* web-interface-guidelines polish: native UI tracks dark */
     --bg-page: #282c34;        /* cool blue-gray canvas (One Dark) — lightest ground */
     --bg-surface: #1d1d1b;     /* header + buttons: mid-tone dark chrome */
     --fg-text: #e8e6dc;
@@ -139,6 +153,7 @@
     --call-expanded-bg: rgba(127, 179, 235, 0.14);
     --call-expanded-edge: rgba(127, 179, 235, 0.45);
     --call-expanded-mark: rgba(127, 179, 235, 0.85);
+    --selection-bg: rgba(127, 179, 235, 0.22);
   }
 }
 
@@ -147,6 +162,7 @@
    sync by hand; CSS can't share a block across a media-gated and an
    attribute-gated selector. */
 :root[data-theme="dark"] {
+  color-scheme: dark;  /* web-interface-guidelines polish: native UI tracks dark */
   --bg-page: #282c34;
   --bg-surface: #1d1d1b;
   --fg-text: #e8e6dc;
@@ -183,6 +199,7 @@
   --call-expanded-bg: rgba(127, 179, 235, 0.14);
   --call-expanded-edge: rgba(127, 179, 235, 0.45);
   --call-expanded-mark: rgba(127, 179, 235, 0.85);
+  --selection-bg: rgba(127, 179, 235, 0.22);
 }
 
 /* ----- reset / base ------------------------------------------------------- */
@@ -210,6 +227,18 @@ html, body {
 
 a { color: inherit; }
 code, pre { font-family: var(--font-mono); }
+
+/* Reserve the scrollbar gutter on scrolling pages so the index filter (which
+   hides rows via display:none and can remove the scrollbar) doesn't shift the
+   layout sideways when results collapse below the viewport. Excludes the flow
+   page (body.flow-page is height:100vh/overflow:hidden — it never scrolls, so a
+   reserved gutter would just leave an empty strip). :has + scrollbar-gutter are
+   modern-browser features; older engines no-op the rule (graceful fallback). */
+html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
+
+/* On-brand text selection: a faint blue-accent wash (background only, so the
+   selected text keeps its resting color). Themed via --selection-bg above. */
+::selection { background: var(--selection-bg); }
 
 /* ----- site chrome -------------------------------------------------------- */
 
@@ -262,7 +291,14 @@ code, pre { font-family: var(--font-mono); }
   border-left: 1px solid var(--border-strong);
 }
 .theme-seg:first-child { border-left: 0; }
-.theme-seg:hover { color: var(--fg-text); }
+/* Hover mirrors the inverted fill of the flow-header buttons (← Index /
+   Collapse all / Reset view) and the active segment pill below — a non-active
+   segment fills dark with light text on hover instead of only shifting text
+   color. The .theme-seg transition (background-color/color) eases it in. */
+.theme-seg:hover {
+  background: var(--fg-text);
+  color: var(--bg-surface);
+}
 .theme-seg[aria-current="true"] {
   background: var(--fg-text);
   color: var(--bg-surface);
@@ -1231,3 +1267,101 @@ body.flow-page .flow-header {
 
 .src .o,
 .src .p { color: var(--fg-text); }
+
+/* ==========================================================================
+   Web Interface Guidelines polish (Vercel WIG pass).
+   A CSS-only refinement layer on top of the established design language — no
+   font, text-color, or layout-structure change. Each block maps to a guideline:
+   focus-visible rings (Focus States), touch/overscroll hygiene (Touch &
+   Interaction), tabular figures + balanced headings (Typography), and
+   reduced-motion-gated micro-transitions (Animation). Grouped here, rather than
+   edited into each rule above, so the pass reads as one reviewable unit.
+   ========================================================================== */
+
+/* Focus States: a visible keyboard focus ring on every interactive control.
+   Replaces the bare `outline: none` the graph frame carried (an explicit WIG
+   anti-pattern) and gives the chrome links/buttons a consistent indicator.
+   :focus-visible (not :focus) keeps the ring off mouse clicks. The ring is an
+   outline (no layout cost) in the themed --focus-ring accent — not text color. */
+.site-title:focus-visible,
+.back-link:focus-visible,
+.flow-control:focus-visible,
+.theme-seg:focus-visible,
+.entry-link:focus-visible,
+.bookmark-jump:focus-visible,
+.bookmark-toggle:focus-visible,
+.index-filter-clear:focus-visible,
+.privacy-footer .source-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+/* The graph canvas is keyboard-focusable (R/0 shortcuts, pan). Inset the ring
+   so it sits just inside the frame's own border rather than outside the edge. */
+#graph-frame:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Touch & Interaction: drop the ~300ms double-tap-zoom delay and the default
+   grey tap-flash on controls that already carry their own hover/focus states. */
+.site-title,
+.back-link,
+.flow-control,
+.theme-seg,
+.entry-link,
+.bookmark-jump,
+.bookmark-toggle,
+.index-filter-clear,
+.src-line--call {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Keep over-scroll inside the pannable canvas instead of chaining to the page. */
+#graph-frame {
+  overscroll-behavior: contain;
+}
+
+/* Typography: stable digit columns for the count / depth / unresolved figures
+   (matches the line-gutter, which already opts in). */
+.index-counts,
+.entry-meta,
+.bookmark-jump-count {
+  font-variant-numeric: tabular-nums;
+}
+/* Typography: balance heading wrap to avoid widow lines. Rebalances breaks
+   within the existing heading box — no structural change. */
+.index-title,
+.group-heading,
+.contract-name,
+.flow-title,
+.error-title {
+  text-wrap: balance;
+}
+
+/* Animation: short easing with an explicit property list (never the blanket
+   `all` keyword) on the chrome hover/focus so controls settle instead of
+   snapping. Gated behind
+   prefers-reduced-motion. Deliberately EXCLUDES graph nodes (#graph / .node):
+   their entrance/relayout is JS-driven (flow-progressive.js d3 transitions) and
+   a CSS transition would fight it. */
+@media (prefers-reduced-motion: no-preference) {
+  .back-link,
+  .flow-control,
+  .theme-seg {
+    transition: background-color 120ms ease, color 120ms ease,
+      border-color 120ms ease;
+  }
+  .bookmark-jump,
+  .index-filter-clear {
+    transition: color 120ms ease, border-color 120ms ease;
+  }
+  .index-filter-input {
+    transition: border-color 120ms ease;
+  }
+  .bookmark-ico {
+    transition: stroke 120ms ease, fill 120ms ease;
+  }
+  .src-line--call {
+    transition: background-color 120ms ease;
+  }
+}
