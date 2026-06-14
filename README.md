@@ -22,9 +22,9 @@ The first job in any audit is reconstructing what actually happens when someone 
 
 ## Features
 
-- **One Flow per entry point.** The index lists every externally callable function, grouped by contract and split into mutating vs. read-only, with modifier badges, call-tree depth, and unresolved-target counts per entry: the whole audit surface on one page.
+- **One Flow per entry point.** The index lists every externally callable function, grouped by contract and split into mutating vs. read-only, with modifier badges, call-tree depth, and unresolved-target counts per entry: the whole audit surface on one page. A filter box narrows the list as you type, by signature or contract name, so protocols with hundreds of entry points stay navigable.
 - **Real source, not boxes.** Every node renders the target function's actual code, syntax-highlighted and line-numbered. Click a call site and the callee expands beside it, the edge anchored to the exact line that makes the call.
-- **Progressive or bird's-eye.** Flows open at the root and expand on demand, so you reveal only the paths you're tracing. `--expand-all` renders the full call tree at page load for a complete overview.
+- **Progressive or bird's-eye.** Flows open at the root and expand on demand, so you reveal only the paths you're tracing. **Expand all** and **Collapse all** controls in the Flow header flip the whole tree at once, or start with `--expand-all` for the full tree at page load. Your expanded call sites are remembered per Flow, so returning to one restores exactly what you had open.
 - **Light or dark.** A header toggle sets the palette — Auto (follows your OS), Light, or Dark — so long audit sessions stay easy on the eyes. The choice is server-rendered: no flash on load, and your preference never leaves the machine.
 - **Bookmarks & recently-viewed.** Bookmark the entry points (and contracts) you keep returning to — they collect in a *Bookmarked* section at the top of the index, reachable from any scroll position via a floating shortcut. Toggling a bookmark happens in place, so the page doesn't lose your spot. Entry points you've already opened are tinted on the index so you can see your progress at a glance. It's all a first-party localhost cookie — no accounts, nothing leaves the machine — and the toggles still work with JavaScript disabled.
 - **It never silently lies.** When a call target can't be resolved statically (an interface with no bound implementation, `addr.call(...)`, computed-target Yul), the node is explicitly marked unresolved, with the reason. No guessing, no silent omissions. The auditor's trust in a Flow's completeness within its declared scope is the load-bearing property.
@@ -47,6 +47,16 @@ solc-select install <version> && solc-select use <version>
 For the latest development version: `pipx install git+https://github.com/norah1499/solidity-flow-navigator`.
 
 To uninstall, `pipx uninstall solflow` removes the tool and all its bundled dependencies; SolFlow writes nothing outside its own install directory. `solc-select` and its downloaded compilers are a separate install, removable with `pipx uninstall solc-select`.
+
+### Updating
+
+Check your installed version with `solflow --version`, and upgrade to the latest release with:
+
+```bash
+pipx upgrade solflow
+```
+
+SolFlow does not check for or notify you about new versions. It makes no network calls of any kind, the same local-and-private property that keeps audited code on your machine, so there is nothing to phone home for an update check. To hear about new releases, watch the [GitHub releases](https://github.com/norah1499/solidity-flow-navigator/releases) or the [PyPI project page](https://pypi.org/project/solflow/), or simply run `pipx upgrade solflow` now and then.
 
 ## Usage
 
@@ -75,6 +85,7 @@ Run `solflow --help` for the full reference, grouped into **Scope**, **Resolutio
 | `--expand-all` | Open every Flow fully expanded, for a bird's-eye view |
 | `--port N` | Bind a specific port (the default auto-selects from 8080 upward) |
 | `--config PATH` | Use a config file other than `solflow.toml` in the working directory |
+| `--version` | Print the installed SolFlow version and exit |
 
 ### Config file
 
