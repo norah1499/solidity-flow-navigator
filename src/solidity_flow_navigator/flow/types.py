@@ -26,9 +26,29 @@ class UnresolvedReason(StrEnum):
     """
 
     INTERFACE_CALL_NO_BINDING = "interface_call_no_binding"  # §13.1
+    # §13.2 — a binding was set for this interface but did not resolve: the
+    # bound contract is out of scope, or implements no function matching the
+    # called signature. Distinct from INTERFACE_CALL_NO_BINDING (no binding at
+    # all) so a wrong/typo'd binding is a loud error, never a silent fall-back.
+    INTERFACE_BINDING_FAILED = "interface_binding_failed"  # §13.2
     LOW_LEVEL_CALL = "low_level_call"  # §13.3 Solidity-level
     YUL_DYNAMIC_DISPATCH = "yul_dynamic_dispatch"  # §13.3 Yul-level
     ABSTRACT_NO_IMPLEMENTATION = "abstract_no_implementation"  # §11.5 (v0.3)
+
+
+@dataclass(frozen=True, slots=True)
+class Binding:
+    """An interface→contract binding recorded on a bound FunctionNode (§13.2).
+
+    Present (non-None ``FunctionNode.bound_via``) only when an interface call
+    was resolved into a concrete contract the auditor pinned via the Bindings
+    panel, ``solflow.toml``'s ``[bindings]`` table, or a ``--bind`` flag. The
+    renderer badges the node ``bound: {interface_name} → {contract_name}`` so
+    the asserted (not statically proven) nature of the edge stays visible (P4).
+    """
+
+    interface_name: str  # static interface type at the call site, e.g. "IStrategy"
+    contract_name: str  # concrete contract the auditor bound it to, e.g. "AaveStrategy"
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +112,13 @@ class FunctionNode:
     # v0.10.4 relation field (spec §11.3) — see class docstring. Optional +
     # kw_only for the same construction-compatibility reason as above.
     call_kind: str | None = field(default=None, kw_only=True)
+    # v0.17.0 interface-binding marker (spec §11.3, §13.2). Non-None iff this
+    # node was reached by resolving an interface call through a user-supplied
+    # binding. None for every normally-resolved node. A bound node carries
+    # call_kind="external" (it remains a cross-contract boundary); bound_via
+    # is the ADDITIONAL signal the renderer badges. Optional + kw_only so
+    # existing constructions stay valid.
+    bound_via: "Binding | None" = field(default=None, kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,6 +9,7 @@ and the behavior of ``path_excluded`` / ``contract_excluded`` /
 from solidity_flow_navigator.flow.scope import (
     DEFAULT_SCOPE,
     Scope,
+    binding_for,
     contract_excluded,
     library_inlined,
     path_excluded,
@@ -31,6 +32,45 @@ def test_scope_is_frozen_and_slotted() -> None:
     params = Scope.__dataclass_params__  # type: ignore[attr-defined]
     assert params.frozen is True, "Scope.__dataclass_params__.frozen is not True"
     assert hasattr(Scope, "__slots__"), "Scope is not slotted"
+
+
+# ---------------------------------------------------------------------------
+# Interface bindings (v0.17.0, §13.2)
+# ---------------------------------------------------------------------------
+
+
+def test_default_scope_has_empty_interface_bindings() -> None:
+    assert DEFAULT_SCOPE.interface_bindings == ()
+
+
+def test_scope_stays_hashable_with_bindings() -> None:
+    """interface_bindings is a tuple of pairs (not a dict) so a Scope remains
+    hashable and can key an lru_cache (§11.2 / §13.2)."""
+
+    a = Scope(interface_bindings=(("IOracle", "ChainlinkOracle"),))
+    b = Scope(interface_bindings=(("IOracle", "ChainlinkOracle"),))
+    assert hash(a) == hash(b)
+
+
+def test_binding_for_returns_none_when_unset() -> None:
+    assert binding_for(Scope(), "IOracle") is None
+
+
+def test_binding_for_returns_bound_contract() -> None:
+    scope = Scope(interface_bindings=(("IOracle", "ChainlinkOracle"),))
+    assert binding_for(scope, "IOracle") == "ChainlinkOracle"
+
+
+def test_binding_for_unmatched_interface_is_none() -> None:
+    scope = Scope(interface_bindings=(("IOracle", "ChainlinkOracle"),))
+    assert binding_for(scope, "IStrategy") is None
+
+
+def test_binding_for_last_wins_on_duplicate() -> None:
+    """A later binding for the same interface overrides an earlier one (§11.2)."""
+
+    scope = Scope(interface_bindings=(("IOracle", "First"), ("IOracle", "Second")))
+    assert binding_for(scope, "IOracle") == "Second"
 
 
 def test_default_scope_matches_spec_11_2() -> None:

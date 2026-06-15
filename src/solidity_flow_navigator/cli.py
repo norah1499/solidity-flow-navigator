@@ -95,6 +95,25 @@ def _distribution_version() -> str:
         return "unknown"
 
 
+def _bind_pair(raw: str) -> tuple[str, str]:
+    """Parse a ``--bind IFACE=CONTRACT`` value into an ``(iface, contract)`` pair.
+
+    Split on the first ``=``; both sides must be non-empty after stripping.
+    Used as the argparse ``type`` for ``--bind`` (spec §11.2 / §13.2), so a
+    malformed value produces a clean ``argument --bind: invalid value`` error
+    instead of a later failure. Whitespace around either side is tolerated.
+    """
+
+    iface, sep, contract = raw.partition("=")
+    iface = iface.strip()
+    contract = contract.strip()
+    if not sep or not iface or not contract:
+        raise argparse.ArgumentTypeError(
+            f"expected IFACE=CONTRACT with non-empty sides, got {raw!r}"
+        )
+    return (iface, contract)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the argparse parser for ``solflow``.
 
@@ -174,6 +193,20 @@ def _build_parser() -> argparse.ArgumentParser:
             "Gitignore-style glob matched against contract names (treated as "
             "single path segments — no '/' involved). Matching contracts "
             "produce no Flows. Repeatable: appends to defaults and config."
+        ),
+    )
+    scope_group.add_argument(
+        "--bind",
+        action="append",
+        default=None,
+        type=_bind_pair,
+        metavar="IFACE=CONTRACT",
+        help=(
+            "Seed an interface binding: resolve interface type IFACE into the "
+            "concrete in-tree contract CONTRACT at its call sites (spec §13.2). "
+            "Repeatable; a later --bind for the same interface wins. Appends to "
+            "any [bindings] table in the config file. Bindings can also be set "
+            "and saved live from the index page's Bindings panel."
         ),
     )
 
@@ -318,6 +351,7 @@ def _resolve_scope(args: argparse.Namespace, cwd: Path) -> Scope:
         exclude_contracts=base.exclude_contracts + tuple(args.exclude_contract or ()),
         inline_libraries=base.inline_libraries + tuple(args.inline_library or ()),
         stub_paths=base.stub_paths + tuple(args.stub_path or ()),
+        interface_bindings=base.interface_bindings + tuple(args.bind or ()),
     )
 
 

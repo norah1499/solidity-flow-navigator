@@ -36,6 +36,68 @@ def _write_toml(tmp_path: Path, body: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# [bindings] table (v0.17.0, §13.2)
+# ---------------------------------------------------------------------------
+
+
+def test_bindings_absent_is_none(tmp_path: Path) -> None:
+    path = _write_toml(tmp_path, '[scope]\nexclude_paths = ["x"]\n')
+    p = load_partial_scope_from_toml(path)
+    assert p.interface_bindings is None
+
+
+def test_bindings_table_parsed_as_ordered_pairs(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        '[bindings]\nIOracle = "ChainlinkOracle"\nIStrategy = "AaveStrategy"\n',
+    )
+    p = load_partial_scope_from_toml(path)
+    assert p.interface_bindings == (
+        ("IOracle", "ChainlinkOracle"),
+        ("IStrategy", "AaveStrategy"),
+    )
+
+
+def test_empty_bindings_table_is_empty_tuple(tmp_path: Path) -> None:
+    path = _write_toml(tmp_path, "[bindings]\n")
+    p = load_partial_scope_from_toml(path)
+    assert p.interface_bindings == ()
+
+
+def test_bindings_without_scope_section_still_loaded(tmp_path: Path) -> None:
+    """A file with [bindings] but no [scope] must still contribute bindings —
+    the early 'no [scope]' return must not drop them."""
+
+    path = _write_toml(tmp_path, '[bindings]\nIOracle = "ChainlinkOracle"\n')
+    p = load_partial_scope_from_toml(path)
+    assert p.interface_bindings == (("IOracle", "ChainlinkOracle"),)
+
+
+def test_bindings_non_string_value_raises(tmp_path: Path) -> None:
+    path = _write_toml(tmp_path, "[bindings]\nIOracle = 123\n")
+    with pytest.raises(ConfigError):
+        load_partial_scope_from_toml(path)
+
+
+def test_bindings_non_table_raises(tmp_path: Path) -> None:
+    path = _write_toml(tmp_path, 'bindings = "nope"\n')
+    with pytest.raises(ConfigError):
+        load_partial_scope_from_toml(path)
+
+
+def test_apply_partial_replaces_bindings() -> None:
+    p = PartialScope(interface_bindings=(("IOracle", "ChainlinkOracle"),))
+    result = apply_partial(DEFAULT_SCOPE, p)
+    assert result.interface_bindings == (("IOracle", "ChainlinkOracle"),)
+
+
+def test_apply_partial_none_bindings_keeps_base() -> None:
+    base = Scope(interface_bindings=(("IOracle", "X"),))
+    result = apply_partial(base, PartialScope())
+    assert result.interface_bindings == (("IOracle", "X"),)
+
+
+# ---------------------------------------------------------------------------
 # PartialScope construction
 # ---------------------------------------------------------------------------
 

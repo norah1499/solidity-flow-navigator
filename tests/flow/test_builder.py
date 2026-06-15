@@ -12,7 +12,17 @@ diagnosable failures rather than ``StopIteration`` or empty matches.
 
 from collections.abc import Callable, Iterator
 
+from solidity_flow_navigator.analysis.types import (
+    CallEdge,
+    Contract,
+    Function,
+    RepoFacts,
+    SourceLocation,
+)
+from solidity_flow_navigator.flow.builder import build_flows
+from solidity_flow_navigator.flow.scope import Scope
 from solidity_flow_navigator.flow.types import (
+    Binding,
     ExternalNode,
     Flow,
     FlowNode,
@@ -75,6 +85,170 @@ def _entry_point_full_names(flows: tuple[Flow, ...], contract_name: str) -> set[
     return {
         f.root.full_name for f in flows if f.entry_point_contract_name == contract_name
     }
+
+
+# ---------------------------------------------------------------------------
+# Interface binding resolution (§13.2) — synthetic facts
+#
+# These build RepoFacts directly (no Slither) to isolate the binding states:
+# resolved, no-binding control, failed-no-contract, failed-no-method, and
+# failed-abstract. Layer 2 is pure, so synthetic facts exercise real
+# build_flows. The shape mirrors the common case Slither produces: a
+# high_level call bound to an interface's own (bodyless) declaration.
+# ---------------------------------------------------------------------------
+
+
+def _bsl(filename_relative: str = "src/x.sol") -> SourceLocation:
+    return SourceLocation(
+        filename_absolute="/abs/" + filename_relative,
+        filename_relative=filename_relative,
+        start=0,
+        length=1,
+        lines=(1,),
+        starting_column=1,
+        ending_column=2,
+    )
+
+
+def _bfunc(
+    declarer: str,
+    full_name: str,
+    *,
+    is_entry_point: bool = False,
+    is_implemented: bool = True,
+    calls: tuple[CallEdge, ...] = (),
+) -> Function:
+    return Function(
+        canonical_name=f"{declarer}.{full_name}",
+        name=full_name.split("(")[0],
+        full_name=full_name,
+        contract_declarer_name=declarer,
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=is_implemented,
+        is_virtual=False,
+        is_entry_point=is_entry_point,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_bsl(),
+        source_code=f"function {full_name} external {{}}",
+        calls=calls,
+    )
+
+
+def _bcontract(
+    name: str,
+    *,
+    kind: str = "contract",
+    is_interface: bool = False,
+    functions: tuple[Function, ...] = (),
+) -> Contract:
+    return Contract(
+        name=name,
+        kind=kind,
+        is_interface=is_interface,
+        is_library=False,
+        is_abstract=False,
+        linearized_base_contract_names=(),
+        immediate_base_contract_names=(),
+        source_location=_bsl(),
+        functions=functions,
+        modifiers=(),
+    )
+
+
+def _binding_facts(
+    *, impl_method: str = "run()", impl_implemented: bool = True
+) -> RepoFacts:
+    """Vault.poke() high-level-calls IStrategy.run(); AaveStrategy implements it.
+
+    The call edge mirrors what Slither emits for ``IStrategy(addr).run()``:
+    a high_level edge bound to the interface's own declaration.
+    """
+
+    edge = CallEdge(
+        kind="high_level",
+        subkind=None,
+        target_canonical_name="IStrategy.run()",
+        target_function_name="run",
+        target_contract_name="IStrategy",
+        is_resolved=True,
+        source_location=_bsl(),
+    )
+    poke = _bfunc("Vault", "poke()", is_entry_point=True, calls=(edge,))
+    vault = _bcontract("Vault", functions=(poke,))
+    istrategy = _bcontract(
+        "IStrategy",
+        kind="interface",
+        is_interface=True,
+        functions=(_bfunc("IStrategy", "run()", is_implemented=False),),
+    )
+    aave = _bcontract(
+        "AaveStrategy",
+        functions=(
+            _bfunc("AaveStrategy", impl_method, is_implemented=impl_implemented),
+        ),
+    )
+    return RepoFacts(
+        repo_path="/abs", contracts=(vault, istrategy, aave), free_functions=()
+    )
+
+
+def test_binding_resolves_interface_call_into_concrete_impl() -> None:
+    facts = _binding_facts()
+    scope = Scope(interface_bindings=(("IStrategy", "AaveStrategy"),))
+    flows = build_flows(facts, scope)
+    node = _flow_by_entry_point(flows, "Vault", "poke()").root.children[0]
+    assert isinstance(node, FunctionNode)
+    assert node.bound_via == Binding("IStrategy", "AaveStrategy")
+    assert node.declarer_contract_name == "AaveStrategy"
+    assert node.invoked_via_contract_name == "AaveStrategy"
+    assert node.call_kind == "external"
+
+
+def test_no_binding_leaves_interface_call_unbound() -> None:
+    facts = _binding_facts()
+    flows = build_flows(facts, Scope())  # no bindings
+    node = _flow_by_entry_point(flows, "Vault", "poke()").root.children[0]
+    assert isinstance(node, FunctionNode)
+    assert node.bound_via is None
+    assert node.declarer_contract_name == "IStrategy"
+
+
+def test_binding_to_missing_contract_is_failed_node() -> None:
+    facts = _binding_facts()
+    scope = Scope(interface_bindings=(("IStrategy", "NoSuchContract"),))
+    flows = build_flows(facts, scope)
+    node = _flow_by_entry_point(flows, "Vault", "poke()").root.children[0]
+    assert isinstance(node, UnresolvedNode)
+    assert node.reason == UnresolvedReason.INTERFACE_BINDING_FAILED
+    assert "not in scope" in node.descriptor
+
+
+def test_binding_to_contract_without_method_is_failed_node() -> None:
+    facts = _binding_facts(impl_method="somethingElse()")
+    scope = Scope(interface_bindings=(("IStrategy", "AaveStrategy"),))
+    flows = build_flows(facts, scope)
+    node = _flow_by_entry_point(flows, "Vault", "poke()").root.children[0]
+    assert isinstance(node, UnresolvedNode)
+    assert node.reason == UnresolvedReason.INTERFACE_BINDING_FAILED
+    assert "run()" in node.descriptor
+
+
+def test_binding_to_unimplemented_method_is_failed_node() -> None:
+    facts = _binding_facts(impl_implemented=False)
+    scope = Scope(interface_bindings=(("IStrategy", "AaveStrategy"),))
+    flows = build_flows(facts, scope)
+    node = _flow_by_entry_point(flows, "Vault", "poke()").root.children[0]
+    assert isinstance(node, UnresolvedNode)
+    assert node.reason == UnresolvedReason.INTERFACE_BINDING_FAILED
 
 
 # ---------------------------------------------------------------------------

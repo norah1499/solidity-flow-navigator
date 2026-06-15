@@ -36,6 +36,7 @@ import pytest
 from solidity_flow_navigator.cli import (
     DEFAULT_PORT,
     SERVER_HOST,
+    _bind_pair,
     _bind_probe,
     _build_parser,
     _resolve_scope,
@@ -52,13 +53,16 @@ def _args(
     exclude_contract: list[str] | None = None,
     inline_library: list[str] | None = None,
     stub_path: list[str] | None = None,
+    bind: list[tuple[str, str]] | None = None,
 ) -> argparse.Namespace:
     """Build an argparse.Namespace mirroring what ``main()``'s parser produces.
 
     Only the scope-related subset is filled in — ``_resolve_scope`` reads
     nothing else. The Namespace shape matches what argparse produces in
     ``main()`` after v0.10.0 Stage 2 (no ``legacy`` / ``no_default_excludes``
-    / ``host`` / ``json`` fields).
+    / ``host`` / ``json`` fields). ``bind`` carries already-parsed
+    ``(iface, contract)`` pairs (argparse applies ``_bind_pair`` as the flag
+    ``type``), matching what ``_resolve_scope`` reads via ``args.bind``.
     """
 
     return argparse.Namespace(
@@ -67,6 +71,7 @@ def _args(
         exclude_contract=exclude_contract,
         inline_library=inline_library,
         stub_path=stub_path,
+        bind=bind,
     )
 
 
@@ -74,6 +79,73 @@ def _write_toml(tmp_path: Path, body: str, name: str = "solflow.toml") -> Path:
     path = tmp_path / name
     path.write_text(body)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Interface bindings — --bind flag and [bindings] merge (v0.17.0, §13.2)
+# ---------------------------------------------------------------------------
+
+
+def test_bind_pair_parses_iface_contract() -> None:
+    assert _bind_pair("IOracle=ChainlinkOracle") == ("IOracle", "ChainlinkOracle")
+
+
+def test_bind_pair_tolerates_surrounding_whitespace() -> None:
+    assert _bind_pair("  IOracle = ChainlinkOracle  ") == (
+        "IOracle",
+        "ChainlinkOracle",
+    )
+
+
+def test_bind_pair_splits_on_first_equals() -> None:
+    assert _bind_pair("I=A=B") == ("I", "A=B")
+
+
+def test_bind_pair_rejects_missing_separator() -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        _bind_pair("IOracleChainlinkOracle")
+
+
+def test_bind_pair_rejects_empty_side() -> None:
+    with pytest.raises(argparse.ArgumentTypeError):
+        _bind_pair("=ChainlinkOracle")
+    with pytest.raises(argparse.ArgumentTypeError):
+        _bind_pair("IOracle=")
+
+
+def test_parser_accepts_repeated_bind() -> None:
+    parser = _build_parser()
+    args = parser.parse_args(
+        [
+            "repo",
+            "--bind",
+            "IOracle=ChainlinkOracle",
+            "--bind",
+            "IStrategy=AaveStrategy",
+        ]
+    )
+    assert args.bind == [
+        ("IOracle", "ChainlinkOracle"),
+        ("IStrategy", "AaveStrategy"),
+    ]
+
+
+def test_resolve_bind_appends_to_empty_default(tmp_path: Path) -> None:
+    result = _resolve_scope(_args(bind=[("IOracle", "ChainlinkOracle")]), tmp_path)
+    assert result.interface_bindings == (("IOracle", "ChainlinkOracle"),)
+
+
+def test_resolve_bind_appends_after_file_bindings(tmp_path: Path) -> None:
+    _write_toml(tmp_path, '[bindings]\nIOracle = "ChainlinkOracle"\n')
+    result = _resolve_scope(_args(bind=[("IStrategy", "AaveStrategy")]), tmp_path)
+    assert result.interface_bindings == (
+        ("IOracle", "ChainlinkOracle"),
+        ("IStrategy", "AaveStrategy"),
+    )
+
+
+def test_resolve_no_bind_leaves_bindings_empty(tmp_path: Path) -> None:
+    assert _resolve_scope(_args(), tmp_path).interface_bindings == ()
 
 
 # ---------------------------------------------------------------------------

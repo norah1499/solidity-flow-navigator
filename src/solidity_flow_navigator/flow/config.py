@@ -72,6 +72,10 @@ class PartialScope:
     exclude_contracts: tuple[str, ...] | None = None
     inline_libraries: tuple[str, ...] | None = None
     stub_paths: tuple[str, ...] | None = None
+    # v0.17.0 (§13.2): the [bindings] table — interface→contract pairs. None
+    # when the table is absent, () when present-but-empty, populated otherwise.
+    # Sourced from a top-level [bindings] table, not a [scope] key.
+    interface_bindings: tuple[tuple[str, str], ...] | None = None
 
 
 def load_partial_scope_from_toml(path: Path) -> PartialScope:
@@ -98,12 +102,16 @@ def load_partial_scope_from_toml(path: Path) -> PartialScope:
         except tomllib.TOMLDecodeError as exc:
             raise ConfigError(f"malformed TOML in {path}: {exc}") from exc
 
+    # The [bindings] table (v0.17.0, §13.2) is a top-level sibling of [scope],
+    # so parse it independently — a file may carry [bindings] with no [scope].
+    bindings = _extract_string_map(data.get("bindings"), path)
+
     scope_table = data.get("scope")
     if scope_table is None:
-        # No [scope] section: nothing for us to apply. Top-level sections
-        # we don't recognize are silently ignored — other tools may share
-        # this file in future versions.
-        return PartialScope()
+        # No [scope] section: only [bindings] (if any) contributes. Other
+        # unrecognized top-level sections are silently ignored — other tools
+        # may share this file in future versions.
+        return PartialScope(interface_bindings=bindings)
 
     if not isinstance(scope_table, dict):
         raise ConfigError(
@@ -125,6 +133,7 @@ def load_partial_scope_from_toml(path: Path) -> PartialScope:
         exclude_contracts=_extract_string_list(scope_table, "exclude_contracts", path),
         inline_libraries=_extract_string_list(scope_table, "inline_libraries", path),
         stub_paths=_extract_string_list(scope_table, "stub_paths", path),
+        interface_bindings=bindings,
     )
 
 
@@ -158,6 +167,11 @@ def apply_partial(base: Scope, partial: PartialScope) -> Scope:
         stub_paths=(
             base.stub_paths if partial.stub_paths is None else partial.stub_paths
         ),
+        interface_bindings=(
+            base.interface_bindings
+            if partial.interface_bindings is None
+            else partial.interface_bindings
+        ),
     )
 
 
@@ -185,3 +199,33 @@ def _extract_string_list(
                 f"got {type(element).__name__}"
             )
     return tuple(value)
+
+
+def _extract_string_map(
+    table: object, path: Path
+) -> tuple[tuple[str, str], ...] | None:
+    """Parse a ``[bindings]``-style TOML table into a tuple of string pairs.
+
+    Returns ``None`` when ``table`` is absent (the section wasn't in the file),
+    ``()`` for an empty table, or a tuple of ``(key, value)`` pairs preserving
+    file order. Raises ``ConfigError`` if ``table`` is not a table or any value
+    is not a string — the §11.2 validation style. Used for the v0.17.0
+    ``[bindings]`` table (§13.2): interface type name → concrete contract name.
+    TOML guarantees keys are strings, so only values are type-checked.
+    """
+
+    if table is None:
+        return None
+    if not isinstance(table, dict):
+        raise ConfigError(
+            f"[bindings] in {path} must be a table, got {type(table).__name__}"
+        )
+    pairs: list[tuple[str, str]] = []
+    for key, value in table.items():
+        if not isinstance(value, str):
+            raise ConfigError(
+                f"[bindings].{key} in {path} must be a string "
+                f"(a concrete contract name), got {type(value).__name__}"
+            )
+        pairs.append((key, value))
+    return tuple(pairs)

@@ -24,11 +24,19 @@ import urllib.parse
 import pytest
 from flask.testing import FlaskClient
 
-from solidity_flow_navigator.analysis.types import RepoFacts
+from solidity_flow_navigator.analysis.types import (
+    Contract,
+    Function,
+    RepoFacts,
+    SourceLocation,
+)
+from solidity_flow_navigator.flow.scope import Scope
 from solidity_flow_navigator.flow.types import Flow
 from solidity_flow_navigator.serve.app import (
     BOOKMARK_COOKIE,
     THEME_COOKIE,
+    _candidate_contracts,
+    _implemented_signatures,
     _parse_bookmarks,
     _safe_json,
     _safe_next,
@@ -1972,3 +1980,118 @@ def test_main_css_filter_hidden_for_no_js(client: FlaskClient) -> None:
     assert (
         ".index-filter:not([hidden])" in css
     ), "filter display must be gated on :not([hidden]) so it stays hidden with JS off."
+
+
+# ---------------------------------------------------------------------------
+# Interface bindings (v0.17.0, spec §10.2, §13.2)
+# ---------------------------------------------------------------------------
+
+
+def test_bind_route_redirects_and_index_still_renders(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...]
+) -> None:
+    app = create_app(solmate_facts, solmate_flows, scope=Scope())
+    app.config.update(TESTING=True)
+    c = app.test_client()
+    resp = c.get("/bind/IFoo?contract=Bar&next=/")
+    assert resp.status_code == 302
+    # the rebuild succeeded and the index renders with the new state
+    assert c.get("/").status_code == 200
+
+
+_SL = SourceLocation(
+    filename_absolute="/abs/x.sol",
+    filename_relative="src/x.sol",
+    start=0,
+    length=1,
+    lines=(1,),
+    starting_column=1,
+    ending_column=2,
+)
+
+
+def _ct(
+    name: str,
+    *,
+    kind: str = "contract",
+    is_interface: bool = False,
+    is_abstract: bool = False,
+    bases: tuple[str, ...] = (),
+    funcs: tuple[Function, ...] = (),
+) -> Contract:
+    return Contract(
+        name=name,
+        kind=kind,
+        is_interface=is_interface,
+        is_library=False,
+        is_abstract=is_abstract,
+        linearized_base_contract_names=bases,
+        immediate_base_contract_names=bases[:1] if bases else (),
+        source_location=_SL,
+        functions=funcs,
+        modifiers=(),
+    )
+
+
+def _fn(declarer: str, full_name: str, *, is_implemented: bool = True) -> Function:
+    return Function(
+        canonical_name=f"{declarer}.{full_name}",
+        name=full_name.split("(")[0],
+        full_name=full_name,
+        contract_declarer_name=declarer,
+        visibility="external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=False,
+        is_implemented=is_implemented,
+        is_virtual=False,
+        is_entry_point=False,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=(),
+        source_location=_SL,
+        source_code="",
+        calls=(),
+    )
+
+
+def test_candidate_contracts_excludes_unrelated_contracts() -> None:
+    """Candidates are explicit + structural implementers only — never every
+    contract in the repo (the bug that dumped all contracts into the dropdown)."""
+    iface = _ct(
+        "IFoo",
+        kind="interface",
+        is_interface=True,
+        funcs=(_fn("IFoo", "foo()", is_implemented=False),),
+    )
+    structural = _ct("FooImpl", funcs=(_fn("FooImpl", "foo()"),))
+    explicit = _ct("FooChild", bases=("IFoo",), funcs=(_fn("FooChild", "foo()"),))
+    unrelated = _ct("Bar", funcs=(_fn("Bar", "bar()"),))
+    facts = RepoFacts(
+        repo_path="/abs",
+        contracts=(iface, structural, explicit, unrelated),
+        free_functions=(),
+    )
+    cands = _candidate_contracts(facts, "IFoo", _implemented_signatures(facts))
+    assert "FooImpl" in cands  # structural implementer
+    assert "FooChild" in cands  # explicit implementer
+    assert "Bar" not in cands  # unrelated — the noise we removed
+
+
+def test_candidate_contracts_empty_when_nothing_implements() -> None:
+    """An interface nothing implements (e.g. a cheatcode interface) yields an
+    empty candidate list rather than every contract."""
+    iface = _ct(
+        "Vm",
+        kind="interface",
+        is_interface=True,
+        funcs=(_fn("Vm", "warp(uint256)", is_implemented=False),),
+    )
+    other = _ct("Bar", funcs=(_fn("Bar", "bar()"),))
+    facts = RepoFacts(repo_path="/abs", contracts=(iface, other), free_functions=())
+    cands = _candidate_contracts(facts, "Vm", _implemented_signatures(facts))
+    assert cands == ()

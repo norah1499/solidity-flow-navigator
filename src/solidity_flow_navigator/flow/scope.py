@@ -40,15 +40,25 @@ import pathspec
 class Scope:
     """Container for user-configured scope rules.
 
-    All four fields are tuples (frozen, hashable) so a Scope can key an
+    All fields are tuples (frozen, hashable) so a Scope can key an
     ``lru_cache``. CLI resolution constructs the final Scope after layering
     defaults, file values, and CLI flag values per spec §11.2.
+
+    ``interface_bindings`` (v0.17.0, spec §13.2) is a tuple of
+    ``(interface_name, contract_name)`` pairs rather than a dict — a dict is
+    unhashable and would break the frozen/cacheable contract. Each pair binds
+    one interface type to one concrete contract globally. Unlike the four
+    glob/name sets this one is exact-name-keyed and may be replaced at runtime
+    by the index Bindings panel (§8.3), which re-runs ``build_flows`` against
+    the server-held facts (§11.1). ``binding_for`` resolves the bound contract
+    name for an interface, applying last-wins on duplicate pairs.
     """
 
     exclude_paths: tuple[str, ...] = ()
     exclude_contracts: tuple[str, ...] = ()
     inline_libraries: tuple[str, ...] = ()
     stub_paths: tuple[str, ...] = ()
+    interface_bindings: tuple[tuple[str, str], ...] = ()
 
 
 # Default tuple values track spec §11.2's "Default scope" block. v0.2 broadens
@@ -62,6 +72,7 @@ DEFAULT_SCOPE: Scope = Scope(
     exclude_contracts=("*Mock*",),
     inline_libraries=(),
     stub_paths=(),
+    interface_bindings=(),
 )
 
 
@@ -146,3 +157,22 @@ def target_stubbed(scope: Scope, filename_relative: str) -> bool:
     if not scope.stub_paths:
         return False
     return _compile_spec(scope.stub_paths).match_file(filename_relative)
+
+
+def binding_for(scope: Scope, interface_name: str) -> str | None:
+    """Return the concrete contract bound to ``interface_name``, or None.
+
+    Reads ``scope.interface_bindings`` (spec §13.2), the exact-name-keyed map
+    of interface → concrete contract. Last-wins on duplicate entries for the
+    same interface, matching the §11.2 resolution rule that a later ``--bind``
+    or panel selection overrides an earlier one. Empty tuple / no match →
+    None (the interface stays at its §13.1 default rendering).
+    """
+
+    if not scope.interface_bindings:
+        return None
+    result: str | None = None
+    for iface, contract in scope.interface_bindings:
+        if iface == interface_name:
+            result = contract
+    return result

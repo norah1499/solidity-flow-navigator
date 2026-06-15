@@ -1056,6 +1056,37 @@ body.flow-page .flow-header {
   color: var(--fg-muted);
   border: 0.5px solid var(--border-soft);
 }
+/* v0.17.0 (spec §13.2): a bound interface call. The dashed border signals
+   "asserted, not statically proven" (P4); the terracotta --tok-number accent
+   (themed light + dark, reused from the bookmark ribbon) sets it apart from
+   the blue `external call` and red `unresolved` relations. */
+.badge-bound {
+  background: transparent;
+  color: var(--tok-number);
+  border: 0.5px dashed var(--tok-number);
+  font-weight: 600;
+}
+
+/* v0.17.0 (spec §10.2, §13.2): inline interface-bind control on a Flow node.
+   Sits below the node title/badges; terracotta label matches the bound badge. */
+.node-bind {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+}
+.node-bind-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--tok-number);
+  white-space: nowrap;
+}
+.node-bind-select {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  max-width: 16rem;
+}
 
 /* v0.7.0 title bar: dedicated header row above the source body carrying the
    short-form title on a slightly darker cream background, separated from the

@@ -24,12 +24,14 @@ from solidity_flow_navigator.analysis.types import (
 from .modifiers import resolve_modifier
 from .scope import (
     Scope,
+    binding_for,
     contract_excluded,
     library_inlined,
     path_excluded,
     target_stubbed,
 )
 from .types import (
+    Binding,
     ExternalNode,
     Flow,
     FlowNode,
@@ -311,6 +313,7 @@ class _FlowBuilder:
         path: frozenset[str],
         call_site_line: int | None = None,
         call_kind: str | None = None,
+        bound_via: Binding | None = None,
     ) -> FunctionNode:
         """Recursive node builder. Emits a terminal node (empty children) on cycle.
 
@@ -338,7 +341,12 @@ class _FlowBuilder:
             # v0: implicit cycle termination per spec §11.10. Renderer can
             # spot the cycle by matching canonical_name against an ancestor.
             return self._terminal_function_node(
-                func, invoker_name, invoked_via_super, call_site_line, call_kind
+                func,
+                invoker_name,
+                invoked_via_super,
+                call_site_line,
+                call_kind,
+                bound_via,
             )
 
         new_path = path | {func.canonical_name}
@@ -365,6 +373,7 @@ class _FlowBuilder:
             children=children,
             call_site_line=call_site_line,
             call_kind=call_kind,
+            bound_via=bound_via,
         )
 
     def _terminal_function_node(
@@ -374,6 +383,7 @@ class _FlowBuilder:
         invoked_via_super: bool,
         call_site_line: int | None = None,
         call_kind: str | None = None,
+        bound_via: Binding | None = None,
     ) -> FunctionNode:
         return FunctionNode(
             canonical_name=func.canonical_name,
@@ -393,6 +403,7 @@ class _FlowBuilder:
             children=(),
             call_site_line=call_site_line,
             call_kind=call_kind,
+            bound_via=bound_via,
         )
 
     def _invoker_name(self) -> str:
@@ -674,6 +685,15 @@ class _FlowBuilder:
         """High-level (cross-contract via type) calls: recurse if Slither
         bound a target, else INTERFACE_CALL_NO_BINDING (§11.9, §13.1).
 
+        Interface binding (§13.2, v0.17.0): an interface call site is
+        redirected into a concrete contract when the auditor set a binding for
+        that interface type. Two shapes count as an interface call site —
+        (a) one Slither left unbound, where the static call-site type is the
+        interface (``edge.target_contract_name``); and (b) one Slither bound to
+        an interface's own bodyless declaration, where the resolved target's
+        declarer ``is_interface``. Both are routed through ``_try_bind``; if no
+        binding is set the call renders at its §13.1 default.
+
         Stage-3 (v0.3): when the bound target's contract is the Flow's
         invoker itself (self-call shape — ``this.X()`` or implicit-this
         Slither reports as high-level), apply ``resolve_virtual_override``
@@ -684,6 +704,18 @@ class _FlowBuilder:
         """
 
         if not edge.is_resolved or edge.target_canonical_name is None:
+            # Slither could not bind. If the static call-site type is an
+            # interface the auditor bound, resolve through that binding;
+            # otherwise the call site is honestly unresolved (§13.1).
+            bound = self._try_bind(
+                edge.target_contract_name,
+                method_full_name=None,
+                method_bare_name=edge.target_function_name,
+                edge=edge,
+                path=path,
+            )
+            if bound is not None:
+                return bound
             return UnresolvedNode(
                 reason=UnresolvedReason.INTERFACE_CALL_NO_BINDING,
                 descriptor=_describe_high_level(edge),
@@ -694,8 +726,17 @@ class _FlowBuilder:
         lexical_target = self._functions_by_canonical.get(edge.target_canonical_name)
         if lexical_target is None:
             # Slither bound a name but the target isn't in our facts. Treat
-            # the same as an unbound interface call: the auditor sees the
-            # boundary and can read the source themselves.
+            # the same as an unbound interface call: try a binding, else the
+            # auditor sees the boundary and can read the source themselves.
+            bound = self._try_bind(
+                edge.target_contract_name,
+                method_full_name=None,
+                method_bare_name=edge.target_function_name,
+                edge=edge,
+                path=path,
+            )
+            if bound is not None:
+                return bound
             return UnresolvedNode(
                 reason=UnresolvedReason.INTERFACE_CALL_NO_BINDING,
                 descriptor=_describe_high_level(edge),
@@ -703,6 +744,24 @@ class _FlowBuilder:
                 raw_kind=edge.kind,
                 raw_subkind=edge.subkind,
             )
+
+        # Interface call site (§13.2): Slither bound the call to an interface's
+        # own bodyless declaration. If the auditor bound that interface to a
+        # concrete contract, resolve into it; otherwise fall through to the
+        # default rendering (the interface declaration as an external node).
+        target_declarer = self._contracts_by_name.get(
+            lexical_target.contract_declarer_name
+        )
+        if target_declarer is not None and target_declarer.is_interface:
+            bound = self._try_bind(
+                lexical_target.contract_declarer_name,
+                method_full_name=lexical_target.full_name,
+                method_bare_name=lexical_target.name,
+                edge=edge,
+                path=path,
+            )
+            if bound is not None:
+                return bound
 
         # Self-call virtual dispatch (§11.5). Triggered when the bound
         # target's contract IS the Flow's invoker. Cross-contract
@@ -750,6 +809,125 @@ class _FlowBuilder:
             call_site_line=_first_line_or_none(edge.source_location.lines),
             call_kind="internal" if is_self_call else "external",
         )
+
+    def _try_bind(
+        self,
+        interface_name: str | None,
+        *,
+        method_full_name: str | None,
+        method_bare_name: str | None,
+        edge: CallEdge,
+        path: frozenset[str],
+    ) -> FlowNode | None:
+        """Resolve an interface call site through a user-supplied binding (§13.2).
+
+        Returns one of:
+          - a bound ``FunctionNode`` (``bound_via`` set, ``call_kind="external"``)
+            when a binding exists and resolves to an implemented method;
+          - an ``UnresolvedNode(INTERFACE_BINDING_FAILED)`` when a binding
+            exists but the bound contract is out of scope, or implements no
+            function matching the called signature — a loud, distinct error,
+            never a silent fall-back to the unbound state;
+          - ``None`` when no binding is set for ``interface_name``, so the
+            caller applies the default §13.1 rendering.
+
+        On success the bound contract becomes the invoker context for the
+        bound subtree (cross-contract analogue of the per-Flow invoker, §11.5):
+        virtual calls inside the bound body resolve through the bound contract's
+        own C3 chain, and descendants carry ``invoked_via_contract_name`` of the
+        bound contract. Only the top bound node carries ``bound_via``.
+        """
+
+        if not interface_name:
+            return None
+        bound_contract_name = binding_for(self.scope, interface_name)
+        if bound_contract_name is None:
+            return None
+
+        binding = Binding(
+            interface_name=interface_name, contract_name=bound_contract_name
+        )
+        bound_contract = self._contracts_by_name.get(bound_contract_name)
+        if bound_contract is None:
+            return UnresolvedNode(
+                reason=UnresolvedReason.INTERFACE_BINDING_FAILED,
+                descriptor=(
+                    f"{interface_name} → {bound_contract_name}: "
+                    f"{bound_contract_name} not in scope"
+                ),
+                call_site=edge.source_location,
+                raw_kind=edge.kind,
+                raw_subkind=edge.subkind,
+            )
+
+        impl = self._resolve_bound_method(
+            bound_contract, method_full_name, method_bare_name
+        )
+        if impl is None:
+            sig = method_full_name or (
+                f"{method_bare_name}(...)" if method_bare_name else "the called method"
+            )
+            return UnresolvedNode(
+                reason=UnresolvedReason.INTERFACE_BINDING_FAILED,
+                descriptor=(
+                    f"{interface_name} → {bound_contract_name}: "
+                    f"no {sig} in {bound_contract_name}"
+                ),
+                call_site=edge.source_location,
+                raw_kind=edge.kind,
+                raw_subkind=edge.subkind,
+            )
+
+        prev_invoker = self._current_invoker_contract
+        self._current_invoker_contract = bound_contract
+        try:
+            return self._build_function_node(
+                impl,
+                invoked_via_super=False,
+                path=path,
+                call_site_line=_first_line_or_none(edge.source_location.lines),
+                call_kind="external",
+                bound_via=binding,
+            )
+        finally:
+            self._current_invoker_contract = prev_invoker
+
+    def _resolve_bound_method(
+        self,
+        bound_contract: Contract,
+        method_full_name: str | None,
+        method_bare_name: str | None,
+    ) -> Function | None:
+        """Find the implemented method on ``bound_contract``'s C3 chain that an
+        interface call targets (§13.2).
+
+        Walks the bound contract then its linearized bases (most-derived
+        first), returning the first IMPLEMENTED function that matches by
+        ``full_name`` (exact signature) when it is known, else by bare
+        ``name``. ``full_name`` is known when Slither bound the interface call
+        to the interface's own declaration (the common case); only the bare
+        name is available for calls Slither left entirely unbound. Returns
+        ``None`` when no implemented match exists in the chain — the caller
+        turns that into an ``INTERFACE_BINDING_FAILED`` node.
+        """
+
+        chain: tuple[str, ...] = (
+            bound_contract.name,
+        ) + bound_contract.linearized_base_contract_names
+        for contract_name in chain:
+            contract = self._contracts_by_name.get(contract_name)
+            if contract is None:
+                continue
+            for candidate in contract.functions:
+                if not candidate.is_implemented:
+                    continue
+                if method_full_name is not None:
+                    if candidate.full_name == method_full_name:
+                        return candidate
+                elif method_bare_name is not None:
+                    if candidate.name == method_bare_name:
+                        return candidate
+        return None
 
     def _external_node(self, target: Function, edge: CallEdge) -> ExternalNode:
         return ExternalNode(

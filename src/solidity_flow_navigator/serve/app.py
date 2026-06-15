@@ -20,7 +20,7 @@ import logging
 import re
 import urllib.parse
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +37,7 @@ from flask import (
 from markupsafe import Markup
 
 from ..analysis.types import RepoFacts
+from ..flow.builder import build_flows
 from ..flow.scope import DEFAULT_SCOPE, Scope
 from ..flow.types import Flow, FunctionNode
 from .highlight import highlight_signature, write_pygments_css
@@ -297,6 +298,113 @@ VIEWED_MAX_AGE = 60 * 60 * 24 * 365  # one year
 VIEWED_MAX = 60
 
 
+# ---------------------------------------------------------------------------
+# Interface binding candidates (spec §13.2) — feed the Flow-page node dropdown
+# ---------------------------------------------------------------------------
+
+
+def _interface_call_sites(facts: RepoFacts) -> dict[str, int]:
+    """Interface type → number of high-level call sites that target it (§13.2).
+
+    A call site counts when a ``kind="high_level"`` edge's resolved declarer —
+    or its static call-site type — is an interface contract. These are the
+    interfaces a binding can resolve, i.e. the ones a Flow node can offer a
+    bind dropdown for.
+    """
+    by_name = {c.name: c for c in facts.contracts}
+    funcs = {f.canonical_name: f for c in facts.contracts for f in c.functions}
+    counts: dict[str, int] = {}
+    for contract in facts.contracts:
+        for f in contract.functions:
+            for e in f.calls:
+                if e.kind != "high_level":
+                    continue
+                iface: str | None = None
+                if e.is_resolved and e.target_canonical_name:
+                    target = funcs.get(e.target_canonical_name)
+                    if target is not None:
+                        decl = by_name.get(target.contract_declarer_name)
+                        if decl is not None and decl.is_interface:
+                            iface = target.contract_declarer_name
+                if iface is None and e.target_contract_name:
+                    decl = by_name.get(e.target_contract_name)
+                    if decl is not None and decl.is_interface:
+                        iface = e.target_contract_name
+                if iface:
+                    counts[iface] = counts.get(iface, 0) + 1
+    return counts
+
+
+def _explicit_implementers(facts: RepoFacts, iface: str) -> list[str]:
+    """Concrete contracts that explicitly inherit ``iface`` (the high-confidence
+    binding candidates), sorted by name."""
+    return sorted(
+        c.name
+        for c in facts.contracts
+        if c.kind == "contract"
+        and not c.is_abstract
+        and iface in c.linearized_base_contract_names
+    )
+
+
+def _implemented_signatures(facts: RepoFacts) -> dict[str, frozenset[str]]:
+    """For each concrete contract, the set of function ``full_name``s it
+    implements across its C3 chain. Precomputed once so structural candidate
+    matching (§13.2) is a cheap subset test rather than a repeated walk."""
+    by_name = {c.name: c for c in facts.contracts}
+    out: dict[str, frozenset[str]] = {}
+    for contract in facts.contracts:
+        if contract.kind != "contract" or contract.is_abstract:
+            continue
+        sigs: set[str] = set()
+        for cn in (contract.name,) + contract.linearized_base_contract_names:
+            base = by_name.get(cn)
+            if base is None:
+                continue
+            sigs.update(f.full_name for f in base.functions if f.is_implemented)
+        out[contract.name] = frozenset(sigs)
+    return out
+
+
+def _interface_methods(facts: RepoFacts, iface: str) -> frozenset[str]:
+    """The function signatures ``iface`` declares, including those inherited
+    from base interfaces. A concrete contract is a structural implementer when
+    it implements all of these."""
+    by_name = {c.name: c for c in facts.contracts}
+    contract = by_name.get(iface)
+    if contract is None:
+        return frozenset()
+    methods: set[str] = set()
+    for cn in (iface,) + contract.linearized_base_contract_names:
+        base = by_name.get(cn)
+        if base is None or not base.is_interface:
+            continue
+        methods.update(f.full_name for f in base.functions)
+    return frozenset(methods)
+
+
+def _candidate_contracts(
+    facts: RepoFacts, iface: str, impl_sigs: dict[str, frozenset[str]]
+) -> tuple[str, ...]:
+    """Concrete contracts that could implement ``iface`` (§13.2): those that
+    explicitly inherit it, plus those that structurally implement ALL of its
+    declared methods.
+
+    Deliberately NOT every contract in the repo — an interface with no real
+    in-scope implementer (a cheatcode interface like ``Vm``, a callback
+    receiver nothing implements) shows an empty list, and the auditor binds an
+    unlisted contract via ``--bind`` / the config table if they really need to.
+    """
+    explicit = set(_explicit_implementers(facts, iface))
+    methods = _interface_methods(facts, iface)
+    structural = (
+        {name for name, sigs in impl_sigs.items() if methods <= sigs}
+        if methods
+        else set()
+    )
+    return tuple(sorted(explicit | structural))
+
+
 def create_app(
     facts: RepoFacts,
     flows: tuple[Flow, ...],
@@ -336,28 +444,54 @@ def create_app(
     # Pygments version. Written into the same static dir Flask serves.
     write_pygments_css(Path(app.static_folder))
 
-    # Indexed by ``entry_point_invoker_canonical_name`` — Layer 2 keys it on
-    # the invoking contract, so it is unique across all Flows.
-    flow_by_url_id: dict[str, Flow] = {
-        f.entry_point_invoker_canonical_name: f for f in flows
-    }
-    groups, total_eps, total_contracts, total_unresolved = build_index(facts, flows)
-
     # v0.15.0 bookmarks: register the anchor-slug filter the templates use for
-    # row ``id``s and the ``next`` fragment, and build flat lookups so the index
-    # route can materialize the ``Bookmarked`` section (in bookmark order) from
-    # the cookie without re-walking the group tree per id.
+    # row ``id``s and the ``next`` fragment.
     app.jinja_env.filters["anchor_slug"] = _anchor_slug
+
+    # v0.17.0 (§13.2): candidate contracts per interface for the Flow-page bind
+    # dropdown. Depends only on the (immutable) facts, so compute once.
+    _impl_sigs = _implemented_signatures(facts)
+    candidates_by_iface: dict[str, tuple[str, ...]] = {
+        iface: _candidate_contracts(facts, iface, _impl_sigs)
+        for iface in _interface_call_sites(facts)
+    }
+
+    # v0.17.0 (§13.2): the binding map is the one Scope field editable at
+    # runtime. The server retains the Layer 1 facts and, when a binding
+    # changes, re-runs Layer 2 (build_flows) — sub-second, no recompile — then
+    # rebuilds the index and per-Flow lookups in place. These are reassigned
+    # via ``nonlocal`` in ``_rebuild`` so the route closures below always read
+    # the current values. The other four scope rules stay fixed for the
+    # process lifetime (§12).
+    current_scope: Scope = scope
+    flow_by_url_id: dict[str, Flow] = {}
+    groups: tuple[_GroupEntry, ...] = ()
+    total_eps = total_contracts = total_unresolved = 0
     entry_by_url_id: dict[str, _EntryPointEntry] = {}
     contract_by_name: dict[str, _ContractEntry] = {}
-    for _group in groups:
-        for _contract in _group.contracts:
-            contract_by_name[_contract.name] = _contract
-            for _ep in (
-                *_contract.mutating_entry_points,
-                *_contract.read_only_entry_points,
-            ):
-                entry_by_url_id[_ep.url_id] = _ep
+
+    def _rebuild(active_scope: Scope, prebuilt: tuple[Flow, ...] | None = None) -> None:
+        nonlocal current_scope, flow_by_url_id, groups
+        nonlocal total_eps, total_contracts, total_unresolved
+        nonlocal entry_by_url_id, contract_by_name
+        these = prebuilt if prebuilt is not None else build_flows(facts, active_scope)
+        current_scope = active_scope
+        flow_by_url_id = {f.entry_point_invoker_canonical_name: f for f in these}
+        groups, total_eps, total_contracts, total_unresolved = build_index(facts, these)
+        entry_by_url_id = {}
+        contract_by_name = {}
+        for _group in groups:
+            for _contract in _group.contracts:
+                contract_by_name[_contract.name] = _contract
+                for _ep in (
+                    *_contract.mutating_entry_points,
+                    *_contract.read_only_entry_points,
+                ):
+                    entry_by_url_id[_ep.url_id] = _ep
+
+    # Seed from the flows the CLI already built with this same scope (avoids a
+    # redundant startup build_flows). Subsequent binding changes rebuild live.
+    _rebuild(scope, prebuilt=flows)
 
     # Common context for every rendered template.
     @app.context_processor
@@ -419,7 +553,7 @@ def create_app(
             total_entry_points=total_eps,
             total_contracts=total_contracts,
             total_unresolved=total_unresolved,
-            scope=scope,
+            scope=current_scope,
             bookmarked_entries=bookmarked_entries,
             bookmarked_contracts=bookmarked_contracts,
             viewed_ids=viewed_ids,
@@ -472,13 +606,34 @@ def create_app(
             response.delete_cookie(BOOKMARK_COOKIE)
         return response
 
+    @app.route("/bind/<path:iface>")
+    def set_binding(iface: str) -> Response:
+        # v0.17.0 (spec §10.2, §13.2). The Flow-page node dropdown GETs here
+        # with ?contract=<name> (or the "__none__" sentinel to clear). We
+        # replace this interface's binding, re-run Layer 2 against the retained
+        # facts (no recompile), and redirect back (``next``, validated to a
+        # local path) — the Flow reloads with the node resolved.
+        iface = urllib.parse.unquote(iface)
+        contract = request.args.get("contract", "")
+        pairs = [(i, c) for (i, c) in current_scope.interface_bindings if i != iface]
+        if contract and contract != "__none__":
+            pairs.append((iface, contract))
+        _rebuild(replace(current_scope, interface_bindings=tuple(pairs)))
+        return redirect(_safe_next(request.args.get("next")))
+
     @app.route("/flow/<path:url_id>")
     def flow_page(url_id: str) -> Response:
         decoded = urllib.parse.unquote(url_id)
         flow = flow_by_url_id.get(decoded)
         if flow is None:
             abort(404)
-        flow_dict = serialize_flow(flow)
+        # v0.17.0 (§10.2, §13.2): give the serializer the candidates and current
+        # bindings so interface-call nodes carry the inline bind dropdown.
+        bindings_ctx = {
+            "candidates": candidates_by_iface,
+            "bound": dict(current_scope.interface_bindings),
+        }
+        flow_dict = serialize_flow(flow, bindings_ctx)
         response = make_response(
             render_template(
                 "flow.html",

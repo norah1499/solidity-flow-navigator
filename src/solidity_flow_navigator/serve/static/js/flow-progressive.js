@@ -125,6 +125,58 @@
     return name.slice(0, i) + "(...)";
   }
 
+  // v0.17.0 (spec §10.2, §13.2): inline bind control on interface-call nodes.
+  // When the serializer attached `node.binding`, render a small dropdown so the
+  // auditor can resolve the interface into a concrete contract directly on the
+  // node — the in-context counterpart to the index Bindings panel. Selecting an
+  // option navigates to /bind (the same single global binding) with
+  // ?next=<this flow> so the server rebuilds and the page reloads with the node
+  // resolved (the expansion state is restored from localStorage on reload).
+  function appendBindingControl(wrap, node) {
+    if (!node.binding) return;
+    const b = node.binding;
+    const ctrl = el("div", "node-bind");
+    ctrl.appendChild(
+      el("span", "node-bind-label", "resolve " + b.interface + " →"),
+    );
+    const sel = el("select", "node-bind-select");
+    const none = el("option", null, "— unbound —");
+    none.value = "__none__";
+    if (!b.bound_to) none.selected = true;
+    sel.appendChild(none);
+    let hasBound = false;
+    (b.candidates || []).forEach((c) => {
+      const o = el("option", null, c);
+      o.value = c;
+      if (b.bound_to === c) {
+        o.selected = true;
+        hasBound = true;
+      }
+      sel.appendChild(o);
+    });
+    if (b.bound_to && !hasBound) {
+      const o = el("option", null, b.bound_to);
+      o.value = b.bound_to;
+      o.selected = true;
+      sel.appendChild(o);
+    }
+    // Keep the graph's pan/zoom and node click handlers out of the native
+    // select interaction.
+    sel.addEventListener("mousedown", (e) => e.stopPropagation());
+    sel.addEventListener("click", (e) => e.stopPropagation());
+    sel.addEventListener("change", () => {
+      window.location.href =
+        "/bind/" +
+        encodeURIComponent(b.interface) +
+        "?contract=" +
+        encodeURIComponent(sel.value) +
+        "&next=" +
+        encodeURIComponent(location.pathname);
+    });
+    ctrl.appendChild(sel);
+    wrap.appendChild(ctrl);
+  }
+
   function renderFunctionNode(node) {
     const wrap = el(
       "div",
@@ -160,7 +212,29 @@
     const badges = el("span", "node-badges");
     if (node.is_modifier) badges.appendChild(el("span", "badge badge-modifier", "modifier"));
     if (node.invoked_via_super) badges.appendChild(el("span", "badge badge-super", "super"));
-    if (node.call_kind === "external") {
+    if (node.bound_via) {
+      // v0.17.0 (spec §13.2): a bound node is a cross-contract call resolved
+      // into a concrete contract via a user binding. It REPLACES the generic
+      // `external call` badge with a specific one naming the binding, so the
+      // asserted (not statically proven, P4) nature stays visible.
+      const b = el(
+        "span",
+        "badge badge-bound",
+        "bound: " +
+          node.bound_via.interface_name +
+          " → " +
+          node.bound_via.contract_name,
+      );
+      b.setAttribute(
+        "title",
+        "interface " +
+          node.bound_via.interface_name +
+          " resolved to " +
+          node.bound_via.contract_name +
+          " via a user binding — an asserted assumption, not a statically proven call",
+      );
+      badges.appendChild(b);
+    } else if (node.call_kind === "external") {
       const b = el("span", "badge badge-external-call", "external call");
       b.setAttribute("title", "high-level call onto another contract or interface");
       badges.appendChild(b);
@@ -226,6 +300,7 @@
       wrap.appendChild(el("div", "node-builtins", "builtins: " + parts.join(", ")));
     }
 
+    appendBindingControl(wrap, node);
     return wrap;
   }
 
@@ -248,6 +323,7 @@
     badges.appendChild(el("span", "badge badge-unresolved", node.reason));
     head.appendChild(badges);
     wrap.appendChild(head);
+    appendBindingControl(wrap, node);
     return wrap;
   }
 

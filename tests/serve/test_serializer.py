@@ -14,8 +14,16 @@ The fixtures pull from the session-scoped ``solmate_flows`` defined in
 from __future__ import annotations
 
 import json
+from typing import Any
 
-from solidity_flow_navigator.flow.types import Flow
+from solidity_flow_navigator.analysis.types import SourceLocation
+from solidity_flow_navigator.flow.types import (
+    Binding,
+    Flow,
+    FunctionNode,
+    UnresolvedNode,
+    UnresolvedReason,
+)
 from solidity_flow_navigator.serve.serializer import serialize_flow
 
 
@@ -37,6 +45,129 @@ def _flow_by_canonical_and_contract(
         ):
             return f
     raise AssertionError(f"flow {contract}/{canonical} not found")
+
+
+# ---------------------------------------------------------------------------
+# Interface-binding node metadata (v0.17.0, §10.2, §13.2)
+# ---------------------------------------------------------------------------
+
+_SL = SourceLocation(
+    filename_absolute="/a.sol",
+    filename_relative="src/a.sol",
+    start=0,
+    length=1,
+    lines=(1,),
+    starting_column=1,
+    ending_column=2,
+)
+
+
+def _fn(**over: Any) -> FunctionNode:
+    base: dict[str, Any] = dict(
+        canonical_name="C.f()",
+        name="f",
+        full_name="f()",
+        declarer_contract_name="C",
+        invoked_via_contract_name="C",
+        invoked_via_super=False,
+        is_modifier=False,
+        visibility="external",
+        payable=False,
+        view=False,
+        pure=False,
+        source_code="function f() {}",
+        source_location=_SL,
+        builtins_used=(),
+        children=(),
+    )
+    base.update(over)
+    return FunctionNode(**base)
+
+
+def _binding_flow() -> Flow:
+    bound_child = _fn(
+        canonical_name="AaveStrategy.run()",
+        name="run",
+        full_name="run()",
+        declarer_contract_name="AaveStrategy",
+        invoked_via_contract_name="AaveStrategy",
+        call_kind="external",
+        bound_via=Binding("IStrategy", "AaveStrategy"),
+    )
+    unresolved_child = UnresolvedNode(
+        reason=UnresolvedReason.INTERFACE_CALL_NO_BINDING,
+        descriptor="IOracle.price(...)",
+        call_site=_SL,
+        raw_kind="high_level",
+        raw_subkind=None,
+    )
+    root = _fn(children=(bound_child, unresolved_child))
+    return Flow(
+        entry_point_declarer_canonical_name="C.f()",
+        entry_point_invoker_canonical_name="C.f()",
+        entry_point_contract_name="C",
+        entry_point_function_name="f",
+        root=root,
+        unresolved_count=1,
+        max_depth=1,
+    )
+
+
+_CTX = {
+    "candidates": {"IStrategy": ("AaveStrategy",), "IOracle": ("ChainlinkOracle",)},
+    "bound": {"IStrategy": "AaveStrategy", "IOracle": None},
+}
+
+
+def test_no_bindings_ctx_attaches_no_binding_metadata() -> None:
+    d = serialize_flow(_binding_flow())  # no ctx → Flow page not in play
+    assert "binding" not in d["root"]["children"][0]
+    assert "binding" not in d["root"]["children"][1]
+
+
+def test_bound_node_gets_binding_control() -> None:
+    d = serialize_flow(_binding_flow(), _CTX)
+    bound = d["root"]["children"][0]
+    assert bound["binding"]["interface"] == "IStrategy"
+    assert bound["binding"]["bound_to"] == "AaveStrategy"
+    assert bound["binding"]["candidates"] == ["AaveStrategy"]
+
+
+def test_unresolved_interface_node_gets_binding_control() -> None:
+    d = serialize_flow(_binding_flow(), _CTX)
+    unres = d["root"]["children"][1]
+    assert unres["binding"]["interface"] == "IOracle"
+    assert unres["binding"]["bound_to"] is None
+    assert unres["binding"]["candidates"] == ["ChainlinkOracle"]
+
+
+def test_root_non_interface_node_has_no_binding_control() -> None:
+    d = serialize_flow(_binding_flow(), _CTX)
+    assert "binding" not in d["root"]
+
+
+def test_interface_with_no_candidates_gets_no_control() -> None:
+    """An unresolved interface call whose interface has no candidates and no
+    binding offers no dropdown (an empty control would be useless)."""
+    node = UnresolvedNode(
+        reason=UnresolvedReason.INTERFACE_CALL_NO_BINDING,
+        descriptor="IFoo.bar(...)",
+        call_site=_SL,
+        raw_kind="high_level",
+        raw_subkind=None,
+    )
+    flow = Flow(
+        entry_point_declarer_canonical_name="C.f()",
+        entry_point_invoker_canonical_name="C.f()",
+        entry_point_contract_name="C",
+        entry_point_function_name="f",
+        root=_fn(children=(node,)),
+        unresolved_count=1,
+        max_depth=1,
+    )
+    ctx = {"candidates": {"IFoo": ()}, "bound": {"IFoo": None}}
+    d = serialize_flow(flow, ctx)
+    assert "binding" not in d["root"]["children"][0]
 
 
 def test_top_level_shape(solmate_flows: tuple[Flow, ...]) -> None:
