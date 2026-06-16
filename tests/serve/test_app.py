@@ -1261,6 +1261,42 @@ def test_flow_progressive_anchors_single_node_ranks(client: FlaskClient) -> None
     )
 
 
+def test_flow_progressive_colors_argument_nested_calls(client: FlaskClient) -> None:
+    """Calls nested inside another call's argument list (the ``bar`` in
+    ``foo(bar(x))``) render in a distinct color so they stand out — with no
+    change to interaction (the whole line stays the single expand target, and
+    a nested call still opens together with its line).
+
+    The renderer locates real call sites in the function's source text
+    (``scanCallSites`` — an identifier followed by ``(``, including on the
+    continuation lines of a multi-line call statement) and tags the nested ones
+    with ``src-call-name--arg``; main.css colors that class with the teal
+    ``--tok-call-arg``, defined once per theme block (light / auto-dark @media /
+    forced ``:root[data-theme="dark"]``), matching the other tokenized call
+    colors. pytest cannot run the JS; pin the helper, the class tag, and the
+    three-block token.
+    """
+    js = client.get("/static/js/flow-progressive.js").get_data(as_text=True)
+    assert "function scanCallSites(" in js, (
+        "flow-progressive.js must define scanCallSites to locate call sites "
+        "(including on continuation lines of multi-line statements) and detect "
+        "argument-nesting from source text."
+    )
+    assert "src-call-name--arg" in js, (
+        "the renderer must tag argument-nested call-name tokens with "
+        "src-call-name--arg (distinct color, behavior unchanged)."
+    )
+    css = client.get("/static/css/main.css").get_data(as_text=True)
+    assert css.count("--tok-call-arg:") == 3, (
+        "--tok-call-arg must be defined once per theme block (light, auto-dark "
+        "@media, forced :root[data-theme=dark]), like the other tokenized call "
+        "colors."
+    )
+    assert (
+        ".src-call-name--arg" in css
+    ), "main.css must color the .src-call-name--arg class with --tok-call-arg."
+
+
 def test_flow_progressive_relation_badges_and_title_qualification(
     client: FlaskClient,
 ) -> None:

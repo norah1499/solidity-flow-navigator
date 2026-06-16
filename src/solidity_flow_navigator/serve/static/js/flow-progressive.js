@@ -396,30 +396,159 @@
     return wrapped.join("\n");
   }
 
-  // Colorize the call-name token inside each .src-line--call. Walks text
-  // nodes, matches against the known children's names for that line, and
-  // wraps each match in <span class="src-call-name">. Pygments often emits
-  // call sites as bare text (no enclosing <span>), so DOM walking after
-  // insertion is the simplest reliable approach.
+  // Colorize call-name tokens inside FunctionNode source bodies. For each
+  // resolved child, find where its call actually appears in the source — an
+  // identifier immediately followed by "(" — and wrap that token in
+  // <span class="src-call-name">. Scanning the whole body (scanCallSites)
+  // rather than only the child's recorded call_site_line is what lets a call
+  // written on a CONTINUATION line of a multi-line statement still be colored:
+  // Slither records every sub-call of `f(\n  g(),\n  h()\n)` at the statement's
+  // first line, so g/h sit on lines the old per-line search never looked at
+  // (Aave `BorrowLogic.executeBorrow(... _msgSender(), getPriceOracle() ...)`
+  // is the case that exposed this).
+  //
+  // A call whose name sits inside another call's argument list (the `bar` in
+  // `foo(bar(x))`, or g/h above) is additionally tagged `src-call-name--arg`
+  // so CSS gives it a distinct color. Interaction is untouched: only the
+  // recorded call_site_line is a `.src-line--call` click target, so a nested
+  // call still expands together with its statement and clicking its name does
+  // nothing special.
   function colorizeCallNamesAcrossLines(pre, funcNode) {
-    const baseLine = funcNode.source_location.lines[0];
-    const namesByLine = new Map(); // lineIdx -> Set<name>
+    const childNames = new Set();
     (funcNode.children || []).forEach((c) => {
-      if (c.call_site_line == null) return;
-      const rel = c.call_site_line - baseLine;
-      if (rel < 0) return;
       const name = nameForCall(c);
-      if (!name) return;
-      const set = namesByLine.get(rel) || new Set();
-      set.add(name);
-      namesByLine.set(rel, set);
+      if (name) childNames.add(name);
     });
-    pre.querySelectorAll(".src-line--call").forEach((lineSpan) => {
-      const idx = parseInt(lineSpan.getAttribute("data-line"), 10);
-      const names = namesByLine.get(idx);
-      if (!names || names.size === 0) return;
-      colorizeNamesInSubtree(lineSpan, names);
+    if (childNames.size === 0) return;
+    const occ = scanCallSites(funcNode.source_code || "").filter((o) =>
+      childNames.has(o.name)
+    );
+    if (occ.length === 0) return;
+    const byLine = new Map(); // lineIdx -> [occurrence, ...]
+    occ.forEach((o) => {
+      const arr = byLine.get(o.line) || [];
+      arr.push(o);
+      byLine.set(o.line, arr);
     });
+    const lineSpans = new Map();
+    pre.querySelectorAll(".src-line").forEach((s) => {
+      lineSpans.set(parseInt(s.getAttribute("data-line"), 10), s);
+    });
+    byLine.forEach((occs, lineIdx) => {
+      const span = lineSpans.get(lineIdx);
+      if (span) wrapOccurrencesInLine(span, occs);
+    });
+  }
+
+  // Scan a function's source for call sites and their argument-nesting.
+  // Returns one record per call site (an identifier immediately followed by
+  // "("): { line, col, len, name, nested } — `line` is the 0-based line index
+  // (matching `.src-line` data-line), `col`/`len` locate the name token within
+  // that line, and `nested` is true when the call sits inside another call's
+  // argument list. String, char, and comment spans are skipped. Control-flow
+  // keywords (if/for/while/...) do NOT open an argument context, so a call in
+  // their parenthesized clause is not marked nested; require/assert/revert are
+  // deliberately absent from that list — they are function-like, so a call in
+  // their arguments is genuinely nested.
+  function scanCallSites(source) {
+    const occ = [];
+    const stack = []; // true = call paren, false = grouping paren
+    let r = 0;
+    let c = 0;
+    let callDepth = 0;
+    let state = "code"; // code | line | block | str | chr
+    let prevSig = ""; // last non-whitespace code char
+    let curWord = ""; // identifier run currently being read
+    let prevWord = ""; // last completed identifier run
+    let prevCh = "";
+    let esc = false;
+    let blockOpen = -1;
+    const NON_CALL_KW = new Set([
+      "if",
+      "for",
+      "while",
+      "switch",
+      "catch",
+      "do",
+      "return",
+      "returns",
+    ]);
+    for (let k = 0; k < source.length; k++) {
+      const ch = source[k];
+      if (ch === "\n") {
+        r += 1;
+        c = 0;
+        if (state === "line") state = "code";
+        if (curWord !== "") {
+          prevWord = curWord;
+          curWord = "";
+        }
+        prevCh = ch;
+        continue;
+      }
+      if (state === "code") {
+        const nx = source[k + 1];
+        if (ch === "/" && nx === "/") {
+          state = "line";
+        } else if (ch === "/" && nx === "*") {
+          state = "block";
+          blockOpen = k;
+        } else if (ch === '"') {
+          state = "str";
+          esc = false;
+        } else if (ch === "'") {
+          state = "chr";
+          esc = false;
+        } else if (ch === "(") {
+          // Call paren iff it follows a function name: an identifier that is
+          // not a control-flow keyword (the word right before "(", allowing a
+          // space as in `foo (x)`), or a ")"/"]" (chained / indexed call like
+          // `f()(x)` / `arr[i](x)`). Grouping parens (`(a + b)`, `if (...)`)
+          // do not count, so calls inside them are not argument-nested.
+          const word = curWord !== "" ? curWord : prevWord;
+          let isCall;
+          if (word !== "") isCall = !NON_CALL_KW.has(word);
+          else isCall = prevSig === ")" || prevSig === "]";
+          // Record the call-name occurrence only when the name abuts "(" (the
+          // form a member/free call always takes). `nested` is the enclosing
+          // call depth BEFORE this paren opens.
+          if (isCall && curWord !== "") {
+            occ.push({
+              line: r,
+              col: c - curWord.length,
+              len: curWord.length,
+              name: curWord,
+              nested: callDepth >= 1,
+            });
+          }
+          stack.push(isCall);
+          if (isCall) callDepth += 1;
+        } else if (ch === ")") {
+          const wasCall = stack.pop();
+          if (wasCall) callDepth = Math.max(0, callDepth - 1);
+        }
+        if (/[A-Za-z0-9_$]/.test(ch)) {
+          curWord += ch;
+        } else if (curWord !== "") {
+          prevWord = curWord;
+          curWord = "";
+        }
+        if (!/\s/.test(ch)) prevSig = ch;
+      } else if (state === "block") {
+        if (prevCh === "*" && ch === "/" && k > blockOpen + 1) state = "code";
+      } else if (state === "str") {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') state = "code";
+      } else if (state === "chr") {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === "'") state = "code";
+      }
+      prevCh = ch;
+      c += 1;
+    }
+    return occ;
   }
 
   // Return the human name of the call target for this child. Used as the
@@ -438,53 +567,47 @@
     return null;
   }
 
-  function colorizeNamesInSubtree(root, names) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  // Wrap the given call-site occurrences (each {col, len, nested}) inside one
+  // `.src-line` span. Walks the line's text nodes, tracking the running column
+  // (HTML entities decode 1:1, so textContent columns equal source columns),
+  // and replaces each occurrence's name token with a `<span class="src-call-
+  // name">` (plus `--arg` when nested). Occurrences that fall entirely within a
+  // single text node are wrapped; an identifier split across Pygments spans
+  // (rare for a plain name) is left as-is.
+  function wrapOccurrencesInLine(span, occs) {
+    occs.sort((a, b) => a.col - b.col);
+    const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
     const pending = [];
+    let colInLine = 0;
     while (walker.nextNode()) {
       const text = walker.currentNode;
-      // Build a regex from all names (already-escaped via simple identifier shape)
-      // and tag every match for replacement below.
-      const matches = [];
       const content = text.textContent;
-      names.forEach((name) => {
-        const re = new RegExp("\\b" + escapeRegex(name) + "\\b", "g");
-        let m;
-        while ((m = re.exec(content)) !== null) {
-          matches.push({ start: m.index, end: m.index + name.length, name });
-        }
-      });
-      if (matches.length === 0) continue;
-      matches.sort((a, b) => a.start - b.start);
-      // Reject overlapping matches (keep first)
-      const kept = [];
-      let cursor = -1;
-      matches.forEach((m) => {
-        if (m.start >= cursor) {
-          kept.push(m);
-          cursor = m.end;
-        }
-      });
-      pending.push({ text, content, matches: kept });
+      const start = colInLine;
+      const end = colInLine + content.length;
+      colInLine = end;
+      const here = occs.filter((o) => o.col >= start && o.col + o.len <= end);
+      if (here.length > 0) pending.push({ text, content, start, here });
     }
-    pending.forEach(({ text, content, matches }) => {
+    pending.forEach(({ text, content, start, here }) => {
       const frag = document.createDocumentFragment();
-      let pos = 0;
-      matches.forEach((m) => {
-        if (m.start > pos) frag.appendChild(document.createTextNode(content.slice(pos, m.start)));
-        const span = document.createElement("span");
-        span.className = "src-call-name";
-        span.textContent = m.name;
-        frag.appendChild(span);
-        pos = m.end;
+      let pos = 0; // local offset within content
+      here.forEach((o) => {
+        const local = o.col - start;
+        if (local < pos) return; // overlap guard
+        if (local > pos) {
+          frag.appendChild(document.createTextNode(content.slice(pos, local)));
+        }
+        const nameSpan = document.createElement("span");
+        nameSpan.className = o.nested
+          ? "src-call-name src-call-name--arg"
+          : "src-call-name";
+        nameSpan.textContent = content.slice(local, local + o.len);
+        frag.appendChild(nameSpan);
+        pos = local + o.len;
       });
       if (pos < content.length) frag.appendChild(document.createTextNode(content.slice(pos)));
       text.parentNode.replaceChild(frag, text);
     });
-  }
-
-  function escapeRegex(s) {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   // ----- visibility mutation ---------------------------------------------

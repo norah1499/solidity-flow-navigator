@@ -68,6 +68,11 @@
      interaction colors previously lived only in prefers-color-scheme blocks,
      which an explicit data-theme override cannot reach. */
   --tok-call: #5a8fc4;
+  /* Call names nested inside another call's argument list (foo(bar(x))'s bar).
+     Teal — a sibling of the call-blue but clearly distinct from it, the keyword
+     blue, and the burnt-orange number token. Dark mode lifts it to #5fc9bf for
+     contrast on the near-black panel. */
+  --tok-call-arg: #1f8a82;
   --call-hover-bg: rgba(58, 109, 176, 0.12);
   --call-expanded-bg: rgba(90, 143, 196, 0.10);
   --call-expanded-edge: rgba(90, 143, 196, 0.40);
@@ -149,6 +154,7 @@
     --seen-bg: rgba(181, 177, 255, 0.22);
 
     --tok-call: #7fb3eb;
+    --tok-call-arg: #5fc9bf;
     --call-hover-bg: rgba(127, 179, 235, 0.16);
     --call-expanded-bg: rgba(127, 179, 235, 0.14);
     --call-expanded-edge: rgba(127, 179, 235, 0.45);
@@ -195,6 +201,7 @@
   --seen-bg: rgba(181, 177, 255, 0.22);
 
   --tok-call: #7fb3eb;
+  --tok-call-arg: #5fc9bf;
   --call-hover-bg: rgba(127, 179, 235, 0.16);
   --call-expanded-bg: rgba(127, 179, 235, 0.14);
   --call-expanded-edge: rgba(127, 179, 235, 0.45);
@@ -1211,9 +1218,23 @@ body.flow-page .flow-header {
    blue #3a6db0 — also darker, more saturated; dark mode shifts it up to
    #7fb3eb, the same value the keyword override uses, keeping the ladder
    consistent). Tokenized at v0.14.0 so a forced Dark theme picks it up. */
-.src .src-line--call .src-call-name,
-.src .src-line--call .src-call-name * {
+/* Call-name tokens. The renderer wraps a name in `.src-call-name` only at a
+   genuine call site (an identifier the call graph resolved to a child,
+   followed by "("), so the color can apply on any source line — including the
+   continuation lines of a multi-line call statement, which are NOT clickable
+   `.src-line--call` lines. Bare prose elsewhere is never wrapped, so it stays
+   on the keyword/name palette. */
+.src .src-call-name,
+.src .src-call-name * {
   color: var(--tok-call);
+}
+/* A call nested inside another call's argument list (foo(bar(x))'s bar) is
+   tagged --arg by the renderer and takes the distinct teal --tok-call-arg.
+   Listed after the base rule so it wins at equal specificity; behavior is
+   unchanged — only the recorded call line is the click target for expansion. */
+.src .src-call-name--arg,
+.src .src-call-name--arg * {
+  color: var(--tok-call-arg);
 }
 .src-line--call:hover .src-call-name {
   text-decoration: underline dotted;
