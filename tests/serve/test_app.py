@@ -1217,6 +1217,50 @@ def test_flow_progressive_balances_expand_all_first_level_sides(
     )
 
 
+def test_flow_progressive_anchors_single_node_ranks(client: FlaskClient) -> None:
+    """The within-rank reorder pass (``reorderRanksBySourceLine``) must NOT
+    short-circuit ranks that hold a single node — a lone child still has to
+    be anchored to its parent's call-site line (spec §10.3 per-line anchor).
+
+    Earlier the per-rank loop began ``if (rankNodes.length < 2) return;``,
+    skipping any node alone in its column. The pass mutates each parent's Y
+    in place (forward-separation sweep, which only pushes DOWN) and relies on
+    re-anchoring the next depth to pull descendants down to follow. A
+    single-call chain hanging off a parent that got pushed down therefore
+    never caught up: each deeper rank held one node, hit the guard, and kept
+    dagre's original Y — so the deep node floated far ABOVE its shifted
+    parent with a long stretched connector edge. Reproduced at depth 3-4 in
+    v4-core (``applyDelta`` → ``NonzeroDeltaCount.decrement``, ``Hooks.callHook``
+    → ``CustomRevert.bubbleUpAndRevertWith``).
+
+    pytest cannot run the JS; pin that the rank-level short-circuit is gone
+    and that lone ranks still flow into the same per-line anchor used for
+    multi-node ranks (and for edge rendering).
+    """
+    rv = client.get("/static/js/flow-progressive.js")
+    js = rv.get_data(as_text=True)
+    assert "reorderRanksBySourceLine" in js, (
+        "flow-progressive.js must define the within-rank reorder pass "
+        "reorderRanksBySourceLine (spec §10.3)."
+    )
+    assert "if (rankNodes.length < 2) return;" not in js, (
+        "reorderRanksBySourceLine must not short-circuit single-node ranks — "
+        "re-adding the rank-level guard regresses the 'deep node flies way "
+        "up, long stretched edge' artifact (single-call chains detach from a "
+        "parent the forward-separation sweep pushed down)."
+    )
+    # Lone ranks must reach the same call-site-line anchor (idealCenter) the
+    # multi-node path and edge rendering use, so the child tracks its parent.
+    assert "const off = lineOffsetInParent(pDom, rel);" in js, (
+        "anchor-then-separate must compute the parent call-site-line offset "
+        "via lineOffsetInParent (spec §10.3 per-line anchor)."
+    )
+    assert "idealCenter = pDagre.y - pDagre.height / 2 + off.y;" in js, (
+        "anchor-then-separate must center each child on its parent's "
+        "call-site line (idealCenter), the rule lone ranks now also obey."
+    )
+
+
 def test_flow_progressive_relation_badges_and_title_qualification(
     client: FlaskClient,
 ) -> None:

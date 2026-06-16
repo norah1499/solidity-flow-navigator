@@ -1161,7 +1161,19 @@
           byRank.set(x, arr);
         });
         byRank.forEach((rankNodes) => {
-          if (rankNodes.length < 2) return;
+          // No length<2 short-circuit: a node ALONE in its rank must still
+          // be anchored. Steps (a) intra-group and (b) inter-group below
+          // no-op for a single child/group, but step (c) re-anchors the
+          // lone child to its parent's (already-finalized, possibly shifted)
+          // call-site-line Y. Without this, a single-call chain hanging off
+          // a parent that the forward-separation sweep pushed DOWN keeps
+          // dagre's original Y and detaches from the shifted parent — the
+          // "deep node flies way up, long stretched edge" artifact, seen at
+          // depth 3-4 in v4-core (applyDelta -> NonzeroDeltaCount.decrement,
+          // Hooks.callHook -> CustomRevert.bubbleUpAndRevertWith). The pass
+          // mutates parent Y in place (n.y, below) but only re-anchors
+          // descendants rank-by-rank; a skipped single-node rank never
+          // catches up, so it must flow through here too.
           // Group by tree parent (via the lexical id prefix of parentIdOf).
           const byParent = new Map();
           rankNodes.forEach((id) => {
