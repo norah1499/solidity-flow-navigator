@@ -11,9 +11,17 @@ from pathlib import Path
 from crytic_compile import CryticCompile
 from slither import Slither
 from slither.core.declarations import Contract as SlitherContract
+from slither.core.declarations import Enum as SlitherEnum
 from slither.core.declarations import Function as SlitherFunction
 from slither.core.declarations import FunctionContract
 from slither.core.declarations import Modifier as SlitherModifier
+from slither.core.declarations import Structure as SlitherStructure
+from slither.core.solidity_types import (
+    ArrayType,
+    MappingType,
+    TypeAlias,
+    UserDefinedType,
+)
 from slither.core.variables.state_variable import StateVariable
 from slither.slithir.operations import (
     HighLevelCall,
@@ -34,6 +42,7 @@ from .types import (
     Parameter,
     RepoFacts,
     SourceLocation,
+    TypeDef,
 )
 
 
@@ -51,10 +60,12 @@ def extract_facts(
     slither = Slither(crytic_compile_obj)
     contracts = tuple(_build_contract(c, repo_root) for c in slither.contracts)
     free_functions = _build_free_functions(slither, repo_root)
+    type_defs = _build_type_defs(slither, repo_root)
     return RepoFacts(
         repo_path=str(repo_root),
         contracts=contracts,
         free_functions=free_functions,
+        type_defs=type_defs,
     )
 
 
@@ -115,6 +126,14 @@ def _build_function(
     parameters = tuple(_parameter(p) for p in f.parameters)
     returns = tuple(_parameter(p) for p in f.returns)
     modifier_names = tuple(m.name for m in f.modifiers)
+    # Struct/enum types named in the signature (params then returns), resolved
+    # from the Slither type objects (not the stringified type_str, which can't
+    # be matched robustly through arrays/mappings/qualified names). Order-
+    # preserving, de-duplicated. Resolved to TypeDefs by Layer 2 (spec §10.2).
+    sig_types: list[str] = []
+    for p in list(f.parameters) + list(f.returns):
+        _user_types_in(getattr(p, "type", None), sig_types)
+    signature_type_canonical_names = tuple(dict.fromkeys(sig_types))
     # Walk this function's OWN CFG nodes only. ``all_slithir_operations()``
     # would recursively flatten ops from every reachable callee into this
     # function's edge list, including ops inside library / assembly blocks
@@ -148,6 +167,7 @@ def _build_function(
         source_location=_source_location(f.source_mapping, repo_root),
         source_code=f.source_mapping.content or "",
         calls=calls,
+        signature_type_canonical_names=signature_type_canonical_names,
     )
 
 
@@ -372,6 +392,127 @@ def _build_free_functions(slither: Slither, repo_root: Path) -> tuple[Function, 
             seen.add(f.canonical_name)
             out.append(_build_function(f, repo_root, is_modifier=False))
     return tuple(out)
+
+
+# ---------------------------------------------------------------------------
+# Struct / enum extraction (spec §10.2 signature-type panel)
+# ---------------------------------------------------------------------------
+
+
+def _user_type_key(decl) -> str:
+    """Stable registry key for a user-defined type declaration or type object.
+
+    Prefers ``canonical_name`` when set (structs/enums always have one; a
+    file-level value type's equals its bare name); falls back to ``name``. The
+    fallback matters for value types: at a *use* site Slither's ``TypeAlias``
+    reports ``canonical_name`` as ``None`` while the *declaration* reports the
+    name, so keying both sides through this helper makes them match.
+    """
+
+    return getattr(decl, "canonical_name", None) or getattr(decl, "name", "")
+
+
+def _user_types_in(t, out: list[str]) -> None:
+    """Append the registry keys of every user-defined type reachable in type ``t``.
+
+    Unwraps the type wrappers so a type is detected however it is used:
+    ``MyStruct`` directly, ``MyStruct[]`` / ``MyStruct[3][]`` (ArrayType),
+    ``mapping(K => V)`` (MappingType — both key and value, since an enum/value
+    type is a legal mapping key). Collected kinds: ``Structure`` and ``Enum``
+    (via ``UserDefinedType``) and ``TypeAlias`` (a user-defined value type such
+    as ``type Currency is address``, which Slither models as the type itself,
+    not wrapped). Everything else (elementary/function types, contract types)
+    contributes nothing. Mutates ``out`` in place so callers accumulate across a
+    whole parameter/return list and de-duplicate once.
+    """
+
+    if t is None:
+        return
+    if isinstance(t, ArrayType):
+        _user_types_in(t.type, out)
+        return
+    if isinstance(t, MappingType):
+        _user_types_in(t.type_from, out)
+        _user_types_in(t.type_to, out)
+        return
+    if isinstance(t, TypeAlias):
+        out.append(_user_type_key(t))
+        return
+    if isinstance(t, UserDefinedType):
+        underlying = t.type
+        if isinstance(underlying, (SlitherStructure, SlitherEnum)):
+            out.append(_user_type_key(underlying))
+
+
+def _build_type_defs(slither: Slither, repo_root: Path) -> tuple[TypeDef, ...]:
+    """Build the repo-wide user-defined-type registry (spec §10.2).
+
+    Enumerates structs, enums, and user-defined value types declared on every
+    contract / interface / library plus the file-level (top-level) declarations
+    Slither hangs off each compilation unit. Dedupes by registry key (Slither's
+    globally-unique canonical name), so a type seen via multiple contracts or
+    compilation units lands once.
+    """
+
+    seen: dict[str, TypeDef] = {}
+    for c in slither.contracts:
+        for s in c.structures_declared:
+            _record_type_def(_struct_def(s, repo_root), seen)
+        for e in c.enums_declared:
+            _record_type_def(_enum_def(e, repo_root), seen)
+        for a in _iter_decls(getattr(c, "type_aliases_declared", ())):
+            _record_type_def(_udvt_def(a, repo_root), seen)
+    for cu in slither.compilation_units:
+        for s in cu.structures_top_level:
+            _record_type_def(_struct_def(s, repo_root), seen)
+        for e in cu.enums_top_level:
+            _record_type_def(_enum_def(e, repo_root), seen)
+        for a in _iter_decls(getattr(cu, "type_aliases", ())):
+            _record_type_def(_udvt_def(a, repo_root), seen)
+    return tuple(seen.values())
+
+
+def _iter_decls(decls):
+    """Yield declarations from a Slither collection that may be a dict or list."""
+    return list(decls.values()) if isinstance(decls, dict) else list(decls or ())
+
+
+def _record_type_def(td: TypeDef, seen: dict[str, TypeDef]) -> None:
+    seen.setdefault(td.canonical_name, td)
+
+
+def _struct_def(s: SlitherStructure, repo_root: Path) -> TypeDef:
+    members: list[str] = []
+    for var in s.elems_ordered:
+        _user_types_in(getattr(var, "type", None), members)
+    return TypeDef(
+        kind="struct",
+        canonical_name=_user_type_key(s),
+        name=s.name,
+        source_location=_source_location(s.source_mapping, repo_root),
+        source_code=s.source_mapping.content or "",
+        member_type_canonical_names=tuple(dict.fromkeys(members)),
+    )
+
+
+def _enum_def(e: SlitherEnum, repo_root: Path) -> TypeDef:
+    return TypeDef(
+        kind="enum",
+        canonical_name=_user_type_key(e),
+        name=e.name,
+        source_location=_source_location(e.source_mapping, repo_root),
+        source_code=e.source_mapping.content or "",
+    )
+
+
+def _udvt_def(a: TypeAlias, repo_root: Path) -> TypeDef:
+    return TypeDef(
+        kind="udvt",
+        canonical_name=_user_type_key(a),
+        name=a.name,
+        source_location=_source_location(a.source_mapping, repo_root),
+        source_code=a.source_mapping.content or "",
+    )
 
 
 # ---------------------------------------------------------------------------

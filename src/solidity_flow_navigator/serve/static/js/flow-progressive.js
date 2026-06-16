@@ -177,6 +177,180 @@
     wrap.appendChild(ctrl);
   }
 
+  // Tag occurrences of a struct's member type names inside its own source so
+  // they take the nested-teal accent (.param-struct-ref), visually linking a
+  // field's type to its nested dropdown. The Pygments Solidity lexer leaves
+  // USER-defined type names as bare, unwrapped text nodes (direct children of
+  // the <pre>) — builtins/field names get <span>s — so we wrap the matching
+  // runs of those bare text nodes in a .param-struct-ref span. Operating only on
+  // direct text-node children targets exactly those unwrapped type tokens and
+  // naturally skips names in comment / field-name spans AND the struct's own
+  // name in its `struct State {` header (a `.nv` span, not a direct text node),
+  // so no own-name exclusion is needed — which is why a qualified self-named
+  // member like `Position.State` (a bare-text ref) does get tagged. `tokens`
+  // already carries the bare member names plus, for collision-qualified members,
+  // their qualifier segment (e.g. `Position`).
+  function colorizeMemberRefs(pre, tokens) {
+    const names = Array.from(new Set(tokens.filter(Boolean)));
+    if (names.length === 0) return;
+    const escaped = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const re = new RegExp("\\b(?:" + escaped.join("|") + ")\\b", "g");
+    Array.prototype.slice.call(pre.childNodes).forEach((node) => {
+      if (node.nodeType !== Node.TEXT_NODE) return;
+      const text = node.nodeValue;
+      re.lastIndex = 0;
+      if (!re.test(text)) return;
+      re.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (m.index > last) {
+          frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+        }
+        const span = el("span", "param-struct-ref");
+        span.textContent = m[0];
+        frag.appendChild(span);
+        last = m.index + m[0].length;
+      }
+      if (last < text.length) {
+        frag.appendChild(document.createTextNode(text.slice(last)));
+      }
+      node.parentNode.replaceChild(frag, node);
+    });
+  }
+
+  // v0.19 signature-type panel (spec §10.2). A collapsed "type definitions:"
+  // disclosure above the source body. Its children are the types named directly
+  // in the signature (signature_type_roots); each struct nests the types it
+  // references through its members ABOVE its own source, recursively, so the
+  // type graph reads as a tree (e.g. TickInfo nested inside Pool.State). Two
+  // distinct types sharing a bare name are shown qualified (Pool.State /
+  // Position.State); unique names stay bare. Cycle-safe: a type already on the
+  // current ancestor path renders as a leaf (its own source, no re-nesting).
+  // Which dropdowns are open persists per-Flow in localStorage, keyed by the
+  // node id + the nesting path so the same type under two parents is
+  // independent; Expand all / Collapse all toggle every dropdown (setAllTypeDefs).
+  // The type bodies are read-only reference: deliberately NOT routed through
+  // wrapCallLines / colorizeCallNames. Omitted when the signature names no
+  // user-defined type.
+  function appendSignatureTypes(wrap, node) {
+    const pool = (node.signature_types || []).filter((t) => t && t.source_html);
+    const roots = (node.signature_type_roots || []).filter((c) =>
+      pool.some((t) => t.canonical_name === c),
+    );
+    if (roots.length === 0) return;
+    const open = readOpenTypeDefs();
+    const nodeId = node.__id;
+    const byCanon = {};
+    pool.forEach((t) => {
+      byCanon[t.canonical_name] = t;
+    });
+    // Qualify a name shared by 2+ DISTINCT types anywhere in the pool; otherwise
+    // show the bare name.
+    const canonsByName = {};
+    pool.forEach((t) => {
+      (canonsByName[t.name] = canonsByName[t.name] || new Set()).add(
+        t.canonical_name,
+      );
+    });
+    const displayName = (t) =>
+      canonsByName[t.name] && canonsByName[t.name].size > 1
+        ? t.canonical_name || t.name
+        : t.name;
+    const kindWord = (t) =>
+      t.kind === "enum" ? "enum " : t.kind === "udvt" ? "type " : "struct ";
+
+    // One <details> per type, members nested above its own source.
+    function renderType(canonical, ancestors, pathPrefix) {
+      const t = byCanon[canonical];
+      if (!t) return null;
+      const item = el("details", "param-struct-item");
+      const key = nodeId + "::" + pathPrefix + canonical;
+      item.open = open.has(key);
+      item.dataset.tdKey = key;
+      item.addEventListener("toggle", () => persistTypeDefOpen(key, item.open));
+      item.appendChild(
+        el("summary", "param-struct-item-summary", kindWord(t) + displayName(t)),
+      );
+      // Cycle guard: don't re-nest a type already on the ancestor path.
+      const members = ancestors.has(canonical)
+        ? []
+        : (t.member_type_canonical_names || []).filter((m) => byCanon[m]);
+      if (members.length > 0) {
+        const nested = el("div", "param-struct-nested");
+        const childAncestors = new Set(ancestors);
+        childAncestors.add(canonical);
+        members.forEach((m) => {
+          const child = renderType(m, childAncestors, pathPrefix + canonical + ">");
+          if (child) nested.appendChild(child);
+        });
+        item.appendChild(nested);
+      }
+      const pre = el(
+        "pre",
+        "param-struct-body src" +
+          (members.length > 0 ? " param-struct-body--after-members" : ""),
+      );
+      pre.innerHTML = t.source_html;
+      // Tag the member type names inside this struct's source: each member's
+      // bare name, plus — for a member shown qualified because its bare name
+      // collides (e.g. Position.State) — the qualifier segment(s) of its
+      // canonical, so the whole qualified reference (Position AND State) tints.
+      const refTokens = [];
+      members.forEach((m) => {
+        const md = byCanon[m];
+        refTokens.push(md.name);
+        if (canonsByName[md.name] && canonsByName[md.name].size > 1) {
+          md.canonical_name
+            .split(".")
+            .slice(0, -1)
+            .forEach((seg) => refTokens.push(seg));
+        }
+      });
+      colorizeMemberRefs(pre, refTokens);
+      item.appendChild(pre);
+      return item;
+    }
+
+    const outer = el("details", "node-param-structs");
+    const outerKey = nodeId + "::*";
+    outer.open = open.has(outerKey);
+    outer.dataset.tdKey = outerKey;
+    outer.addEventListener("toggle", () =>
+      persistTypeDefOpen(outerKey, outer.open),
+    );
+    const rootNames = roots
+      .map((c) => displayName(byCanon[c]))
+      .join(", ");
+    outer.appendChild(
+      el("summary", "node-param-structs-summary", "type definitions: " + rootNames),
+    );
+    roots.forEach((c) => {
+      const item = renderType(c, new Set(), "");
+      if (item) outer.appendChild(item);
+    });
+    wrap.appendChild(outer);
+  }
+
+  // Expand all / Collapse all act on every type-definition dropdown in every
+  // rendered node (spec §10.2), alongside the call-site expansion. Keyed by
+  // data-td-key so the persisted open-set stays in sync; collapse-all clears the
+  // whole set (including dropdowns on nodes not currently in the DOM).
+  function setAllTypeDefs(isOpen) {
+    const all = document.querySelectorAll("[data-td-key]");
+    all.forEach((d) => {
+      d.open = isOpen;
+    });
+    if (isOpen) {
+      const set = readOpenTypeDefs();
+      all.forEach((d) => set.add(d.dataset.tdKey));
+      writeOpenTypeDefs(set);
+    } else {
+      writeOpenTypeDefs(new Set());
+    }
+  }
+
   function renderFunctionNode(node) {
     const wrap = el(
       "div",
@@ -259,6 +433,11 @@
       head.appendChild(badges);
       wrap.appendChild(head);
     }
+
+    // v0.19 signature-type panel (spec §10.2): collapsed <details> above the
+    // source body with the full struct/enum definitions this function's
+    // parameters/returns name (and their nested-struct closure).
+    appendSignatureTypes(wrap, node);
 
     if (node.source_html) {
       // v0.7.0 line-number gutter (spec §10.2). One <span class="line-num">
@@ -664,6 +843,39 @@
   // is the entry's url id (data-flow-id on #flow-data), falling back to the path.
   const STORAGE_KEY =
     "solflow:expanded:" + (dataEl.dataset.flowId || location.pathname);
+
+  // v0.19: which signature-type panels (outer + per-type inner dropdowns) the
+  // auditor has opened, persisted per-Flow so they survive a reload exactly
+  // like the expanded call sites above (spec §10.2). Keyed by node id + type so
+  // a panel restores on whichever node it belongs to; stale keys (source
+  // changed) are simply never matched.
+  const TYPEDEFS_KEY =
+    "solflow:typedefs:" + (dataEl.dataset.flowId || location.pathname);
+
+  function readOpenTypeDefs() {
+    try {
+      return new Set(
+        JSON.parse(window.localStorage.getItem(TYPEDEFS_KEY) || "[]"),
+      );
+    } catch (_err) {
+      return new Set();
+    }
+  }
+
+  function writeOpenTypeDefs(set) {
+    try {
+      window.localStorage.setItem(TYPEDEFS_KEY, JSON.stringify([...set]));
+    } catch (_err) {
+      // localStorage unavailable — persistence is a convenience, never breaks.
+    }
+  }
+
+  function persistTypeDefOpen(key, isOpen) {
+    const set = readOpenTypeDefs();
+    if (isOpen) set.add(key);
+    else set.delete(key);
+    writeOpenTypeDefs(set);
+  }
 
   function persistExpansion() {
     try {
@@ -1925,12 +2137,11 @@
   // controls in the flow header, a convenience over per-call-site clicks. Both
   // persist the resulting expansion (spec "Persisted expansion state").
   function expandAll() {
-    if (EXPAND_ALL && visibleIds.size === nodesById.size) {
-      applyFit(true); // already fully expanded — just re-fit
-      return;
-    }
     const snapshot = snapshotPositions();
     expandAllRecursive(flow.root.__id);
+    // Open every type-definition dropdown too (spec §10.2) — BEFORE measuring so
+    // dagre lays out against the expanded node heights.
+    setAllTypeDefs(true);
     const extents = measureFirstLevelExtents();
     const balanced = balanceFirstLevelSides(extents);
     applyBalancedSides(balanced);
@@ -1952,6 +2163,9 @@
       }
     });
     targets.forEach((id) => collapse(id));
+    // Close every type-definition dropdown too (spec §10.2), before relayout so
+    // dagre measures the collapsed node heights.
+    setAllTypeDefs(false);
     refreshExpandedLineState();
     layoutBox = relayout(snapshot);
     applyFit(true);

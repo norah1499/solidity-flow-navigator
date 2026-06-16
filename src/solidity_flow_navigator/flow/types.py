@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
-from solidity_flow_navigator.analysis.types import SourceLocation
+from solidity_flow_navigator.analysis.types import SourceLocation, TypeDef
 
 
 class UnresolvedReason(StrEnum):
@@ -119,6 +119,22 @@ class FunctionNode:
     # is the ADDITIONAL signal the renderer badges. Optional + kw_only so
     # existing constructions stay valid.
     bound_via: "Binding | None" = field(default=None, kw_only=True)
+    # User-defined types (structs, enums, value types) named by this node's
+    # parameters and returns, plus the types a named struct references through
+    # its members (spec §10.2, §11.3). A Layer 1 fact (``TypeDef``) passed
+    # through unchanged, like ``SourceLocation``; Layer 2 resolves the
+    # per-function canonical names against the repo registry and walks struct
+    # members, de-duplicated by canonical identity. Two distinct types sharing a
+    # bare name are both kept; the renderer disambiguates them by qualified name.
+    # Empty when the signature names no user-defined type. Optional + kw_only so
+    # existing constructions stay valid.
+    signature_types: tuple[TypeDef, ...] = field(default=(), kw_only=True)
+    # Canonical names of the types named DIRECTLY in the signature (the subset of
+    # signature_types that are panel roots), in parameter-then-return order. The
+    # renderer roots the nested type tree here and reaches the rest through each
+    # struct's TypeDef.member_type_canonical_names (spec §10.2). Optional +
+    # kw_only so existing constructions stay valid.
+    signature_type_roots: tuple[str, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)

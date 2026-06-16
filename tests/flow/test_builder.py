@@ -18,6 +18,7 @@ from solidity_flow_navigator.analysis.types import (
     Function,
     RepoFacts,
     SourceLocation,
+    TypeDef,
 )
 from solidity_flow_navigator.flow.builder import build_flows
 from solidity_flow_navigator.flow.scope import Scope
@@ -117,6 +118,7 @@ def _bfunc(
     is_entry_point: bool = False,
     is_implemented: bool = True,
     calls: tuple[CallEdge, ...] = (),
+    signature_type_canonical_names: tuple[str, ...] = (),
 ) -> Function:
     return Function(
         canonical_name=f"{declarer}.{full_name}",
@@ -140,6 +142,7 @@ def _bfunc(
         source_location=_bsl(),
         source_code=f"function {full_name} external {{}}",
         calls=calls,
+        signature_type_canonical_names=signature_type_canonical_names,
     )
 
 
@@ -2724,3 +2727,175 @@ def test_call_kind_internal_on_high_level_self_call() -> None:
     child = flows[0].root.children[0]
     assert isinstance(child, FunctionNode)
     assert child.call_kind == "internal"
+
+
+# ---------------------------------------------------------------------------
+# Signature-type panel resolution (§10.2) — synthetic facts
+#
+# Layer 2 maps a function's signature_type_canonical_names to TypeDefs in the
+# repo registry (RepoFacts.type_defs), walks struct members for nested types,
+# and de-duplicates by name (a given type name appears at most once). Pure
+# transformation, so synthetic facts exercise the real resolver. Detection of
+# which params are user-defined types is Layer 1's job, covered by the analysis
+# integration test + the live morpho-blue / v4-core checks.
+# ---------------------------------------------------------------------------
+
+
+def _btype(
+    name: str,
+    *,
+    kind: str = "struct",
+    members: tuple[str, ...] = (),
+) -> TypeDef:
+    return TypeDef(
+        kind=kind,
+        canonical_name=name,
+        name=name.split(".")[-1],
+        source_location=_bsl(),
+        source_code=f"{kind} {name.split('.')[-1]} {{ uint256 x; }}",
+        member_type_canonical_names=members,
+    )
+
+
+def _sig_facts(
+    *,
+    sig_types: tuple[str, ...],
+    type_defs: tuple[TypeDef, ...],
+) -> RepoFacts:
+    """A one-entry-point repo whose entry function names ``sig_types`` and whose
+    registry holds ``type_defs``."""
+
+    entry = _bfunc(
+        "C", "f()", is_entry_point=True, signature_type_canonical_names=sig_types
+    )
+    contract = _bcontract("C", functions=(entry,))
+    return RepoFacts(
+        repo_path="/abs",
+        contracts=(contract,),
+        free_functions=(),
+        type_defs=type_defs,
+    )
+
+
+def _root_sig_type_names(facts: RepoFacts) -> list[str]:
+    flows = build_flows(facts, Scope())
+    root = _flow_by_entry_point(flows, "C", "f()").root
+    return [t.canonical_name for t in root.signature_types]
+
+
+def test_signature_type_single_struct_resolved() -> None:
+    facts = _sig_facts(sig_types=("MarketParams",), type_defs=(_btype("MarketParams"),))
+    flows = build_flows(facts, Scope())
+    root = _flow_by_entry_point(flows, "C", "f()").root
+    assert len(root.signature_types) == 1
+    td = root.signature_types[0]
+    assert td.canonical_name == "MarketParams"
+    assert td.kind == "struct"
+
+
+def test_signature_type_order_preserved_params_then_returns() -> None:
+    """Multiple signature types resolve in their Layer 1 order (params then
+    returns), each appearing once."""
+    facts = _sig_facts(
+        sig_types=("A", "B", "C"),
+        type_defs=(_btype("A"), _btype("B"), _btype("C")),
+    )
+    assert _root_sig_type_names(facts) == ["A", "B", "C"]
+
+
+def test_signature_type_nested_struct_included_in_order() -> None:
+    """A struct whose member is another struct pulls the member in; the directly
+    named struct leads, the member follows."""
+    facts = _sig_facts(
+        sig_types=("A",),
+        type_defs=(_btype("A", members=("B",)), _btype("B")),
+    )
+    assert _root_sig_type_names(facts) == ["A", "B"]
+
+
+def test_signature_type_recursive_struct_appears_once() -> None:
+    """A self-referential struct (member references itself) terminates and
+    appears exactly once."""
+    facts = _sig_facts(
+        sig_types=("Node",), type_defs=(_btype("Node", members=("Node",)),)
+    )
+    assert _root_sig_type_names(facts) == ["Node"]
+
+
+def test_signature_type_same_name_distinct_structs_both_kept() -> None:
+    """Two DIFFERENT structs that share a bare name (Pool.State named directly,
+    Position.State reached through a member) are BOTH kept — they are distinct
+    types, so Layer 2 retains both and the renderer disambiguates them by
+    qualified name. The member TickInfo is also included."""
+    facts = _sig_facts(
+        sig_types=("Pool.State",),
+        type_defs=(
+            _btype("Pool.State", members=("TickInfo", "Position.State")),
+            _btype("TickInfo"),
+            _btype("Position.State"),  # bare name "State" — collides with Pool.State
+        ),
+    )
+    assert _root_sig_type_names(facts) == ["Pool.State", "TickInfo", "Position.State"]
+    names = [t.name for t in build_flows(facts, Scope())[0].root.signature_types]
+    assert names.count("State") == 2  # both kept; the renderer qualifies them
+
+
+def test_signature_type_enum_resolved() -> None:
+    facts = _sig_facts(
+        sig_types=("OrderType",), type_defs=(_btype("OrderType", kind="enum"),)
+    )
+    root = build_flows(facts, Scope())[0].root
+    assert [t.kind for t in root.signature_types] == ["enum"]
+
+
+def test_signature_type_udvt_resolved() -> None:
+    """A user-defined value type (e.g. ``type BalanceDelta is int256``) resolves
+    like any other signature type, carrying kind='udvt'."""
+    facts = _sig_facts(
+        sig_types=("BalanceDelta",), type_defs=(_btype("BalanceDelta", kind="udvt"),)
+    )
+    root = build_flows(facts, Scope())[0].root
+    assert [(t.kind, t.canonical_name) for t in root.signature_types] == [
+        ("udvt", "BalanceDelta")
+    ]
+
+
+def test_signature_type_same_type_twice_deduped() -> None:
+    """The same type named by two params appears once (de-dup in the resolver)."""
+    facts = _sig_facts(sig_types=("P", "P"), type_defs=(_btype("P"),))
+    assert _root_sig_type_names(facts) == ["P"]
+
+
+def test_signature_type_registry_miss_skipped_silently() -> None:
+    """A signature type whose definition is not in the registry (out-of-scope
+    dependency) is skipped, not raised."""
+    facts = _sig_facts(sig_types=("Missing",), type_defs=())
+    assert _root_sig_type_names(facts) == []
+
+
+def test_signature_type_none_yields_empty() -> None:
+    facts = _sig_facts(sig_types=(), type_defs=(_btype("Unused"),))
+    assert _root_sig_type_names(facts) == []
+
+
+def test_signature_type_roots_are_only_direct_signature_types() -> None:
+    """signature_type_roots holds the directly-named signature types (the tree
+    roots the renderer nests from), NOT the nested member types that the closure
+    pulls into signature_types."""
+    facts = _sig_facts(
+        sig_types=("A",),
+        type_defs=(_btype("A", members=("B",)), _btype("B")),
+    )
+    root = build_flows(facts, Scope())[0].root
+    assert root.signature_type_roots == ("A",)
+    # B is a member, present in the pool but not a root.
+    assert [t.canonical_name for t in root.signature_types] == ["A", "B"]
+
+
+def test_signature_type_roots_dedup_in_order_and_skip_misses() -> None:
+    facts = _sig_facts(
+        sig_types=("X", "Y", "X", "Gone"),
+        type_defs=(_btype("X"), _btype("Y")),
+    )
+    root = build_flows(facts, Scope())[0].root
+    assert root.signature_type_roots == ("X", "Y")  # deduped, ordered, miss skipped

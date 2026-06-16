@@ -44,6 +44,32 @@ class Parameter:
 
 
 @dataclass(frozen=True, slots=True)
+class TypeDef:
+    """A user-defined type (struct, enum, or value type) extracted from Slither.
+
+    Surfaced so Layer 3 can show the definition of the user-defined types a
+    function's parameters and returns name (spec §10.2 signature-type panel),
+    together with the types a named struct references through its members.
+    ``canonical_name`` is the globally-unique key Layer 2 resolves against — a
+    ``Structure``/``Enum`` canonical name (e.g. ``"MarketParams"`` file-level,
+    ``"Morpho.Position"`` contract-scoped), or a user-defined value type's name.
+    ``source_code`` is the full ``struct X {..}`` / ``enum Y {..}`` /
+    ``type Z is uint256;`` text, for Pygments highlighting in Layer 3.
+    ``member_type_canonical_names`` lists the user-defined types named by a
+    struct's members (after unwrapping arrays/mappings) — the edge set Layer 2
+    walks to include a struct's nested types in the panel; always () for enums
+    and value types.
+    """
+
+    kind: str  # "struct" | "enum" | "udvt"
+    canonical_name: str
+    name: str
+    source_location: SourceLocation
+    source_code: str
+    member_type_canonical_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class CallEdge:
     """One outgoing call from a function or modifier body.
 
@@ -129,6 +155,12 @@ class Function:
     source_location: SourceLocation
     source_code: str  # raw text of the declaration; for Pygments in Layer 3
     calls: tuple[CallEdge, ...]  # outgoing calls in source order
+    # Canonical names of user-defined types (structs, enums, value types)
+    # appearing (after array/mapping unwrap) in this function's PARAMETERS then
+    # RETURNS, in that order, de-duplicated. Resolved against RepoFacts.type_defs
+    # by Layer 2 (spec §10.2 / §11.3). Defaulted so synthetic Function
+    # constructions (tests, getters) stay valid.
+    signature_type_canonical_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,3 +200,9 @@ class RepoFacts:
     repo_path: str  # absolute path to the analyzed repo root
     contracts: tuple[Contract, ...]
     free_functions: tuple[Function, ...]  # Solidity top-level functions
+    # Repo-wide user-defined-type registry (structs, enums, value types), keyed
+    # by TypeDef.canonical_name when Layer 2 builds its lookup. Deduplicated by
+    # Slither's own model across contracts / interfaces / libraries / file scope.
+    # Defaulted so existing RepoFacts constructions (synthetic test facts) remain
+    # valid (spec §10.2 / §11.3).
+    type_defs: tuple[TypeDef, ...] = ()

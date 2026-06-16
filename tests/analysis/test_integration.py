@@ -169,3 +169,38 @@ def test_free_functions_extracted(solmate_facts: RepoFacts) -> None:
         assert (
             f.is_entry_point is False
         ), f"free function {f.canonical_name!r} marked as entry point"
+
+
+def test_type_registry_wired_and_consistent(solmate_facts: RepoFacts) -> None:
+    """Signature-type extraction (spec §10.2): the user-defined-type registry
+    and the per-function ``signature_type_canonical_names`` are populated,
+    well-formed, and mutually consistent.
+
+    Solmate's ``src`` declares few user-defined types in its function
+    signatures, so detection is proven by the Layer 2 synthetic tests and the
+    live v4-core / morpho-blue checks; here we assert the machinery is wired and
+    its invariants hold on the canonical repo regardless of how many types it
+    has.
+    """
+    facts = solmate_facts
+    assert isinstance(facts.type_defs, tuple)
+    canon = {t.canonical_name for t in facts.type_defs}
+    for t in facts.type_defs:
+        assert t.kind in ("struct", "enum", "udvt"), t.kind
+        assert t.canonical_name and t.name
+        assert isinstance(t.member_type_canonical_names, tuple)
+        if t.kind in ("enum", "udvt"):
+            assert t.member_type_canonical_names == ()
+        # A struct's member edges only ever point at other registered types.
+        for member in t.member_type_canonical_names:
+            assert member in canon
+    # Every function carries the field, and any type its signature names is in
+    # the registry — so Layer 2 can always resolve it.
+    for c in facts.contracts:
+        for f in c.functions:
+            assert isinstance(f.signature_type_canonical_names, tuple)
+            for name in f.signature_type_canonical_names:
+                assert name in canon, (
+                    f"{f.canonical_name} names user-defined type {name!r} "
+                    f"absent from the registry"
+                )

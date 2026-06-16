@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from solidity_flow_navigator.analysis.types import SourceLocation
+from solidity_flow_navigator.analysis.types import SourceLocation, TypeDef
 from solidity_flow_navigator.flow.types import (
     Binding,
     Flow,
@@ -300,3 +300,65 @@ def test_serialized_tree_is_json_dumpable(solmate_flows: tuple[Flow, ...]) -> No
     assert parsed["root"]["node_type"] == "function"
     assert parsed["root"]["source_html"] == d["root"]["source_html"]
     assert isinstance(parsed["root"]["children"], list)
+
+
+# ---------------------------------------------------------------------------
+# Signature-type panel serialization (§10.2)
+# ---------------------------------------------------------------------------
+
+
+def _td() -> TypeDef:
+    return TypeDef(
+        kind="struct",
+        canonical_name="MarketParams",
+        name="MarketParams",
+        source_location=_SL,
+        source_code="struct MarketParams { address loanToken; uint256 lltv; }",
+    )
+
+
+def _sig_type_flow() -> Flow:
+    root = _fn(signature_types=(_td(),))
+    return Flow(
+        entry_point_declarer_canonical_name="C.f()",
+        entry_point_invoker_canonical_name="C.f()",
+        entry_point_contract_name="C",
+        entry_point_function_name="f",
+        root=root,
+        unresolved_count=0,
+        max_depth=0,
+    )
+
+
+def test_signature_types_serialized_with_highlighted_body() -> None:
+    """Each signature TypeDef round-trips and gains a Pygments ``source_html``
+    alongside its raw ``source_code``, mirroring the FunctionNode body."""
+    d = serialize_flow(_sig_type_flow())
+    types = d["root"]["signature_types"]
+    assert len(types) == 1
+    t = types[0]
+    assert t["kind"] == "struct"
+    assert t["name"] == "MarketParams"
+    assert t["source_code"].startswith("struct MarketParams")
+    assert "<span" in t["source_html"]
+
+
+def test_no_signature_types_serializes_empty() -> None:
+    # asdict keeps the empty tuple as a tuple here; json.dumps later turns it
+    # into [] (the dumpability test covers that). The property under test is
+    # that the field is present and empty, not its container type.
+    d = serialize_flow(_binding_flow())  # _fn default has no signature_types
+    assert d["root"]["signature_types"] == ()
+
+
+def test_other_node_variants_have_no_signature_types() -> None:
+    """Only FunctionNodes carry the panel; unresolved/external dicts don't."""
+    d = serialize_flow(_binding_flow())
+    # children[1] is an UnresolvedNode in _binding_flow.
+    assert "signature_types" not in d["root"]["children"][1]
+
+
+def test_signature_type_flow_is_json_dumpable() -> None:
+    d = serialize_flow(_sig_type_flow())
+    parsed = json.loads(json.dumps(d))
+    assert parsed["root"]["signature_types"][0]["name"] == "MarketParams"

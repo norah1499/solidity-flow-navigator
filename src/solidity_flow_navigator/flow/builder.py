@@ -19,6 +19,7 @@ from solidity_flow_navigator.analysis.types import (
     Contract,
     Function,
     RepoFacts,
+    TypeDef,
 )
 
 from .modifiers import resolve_modifier
@@ -120,6 +121,7 @@ class _FlowBuilder:
         "scope",
         "_contracts_by_name",
         "_functions_by_canonical",
+        "_type_defs_by_canonical",
         "_current_invoker_contract",
     )
 
@@ -128,6 +130,11 @@ class _FlowBuilder:
         self.scope = scope
         self._contracts_by_name: dict[str, Contract] = {
             c.name: c for c in facts.contracts
+        }
+        # Struct/enum registry keyed by canonical_name, for the signature-type
+        # panel (spec §10.2). Built once here like _functions_by_canonical.
+        self._type_defs_by_canonical: dict[str, TypeDef] = {
+            t.canonical_name: t for t in facts.type_defs
         }
         # All callable Function records (contract functions, modifiers, and
         # top-level free functions) keyed by canonical_name. Layer 1's
@@ -232,6 +239,8 @@ class _FlowBuilder:
                 source_location=entry_func.source_location,
                 builtins_used=body_builtins,
                 children=modifier_children + body_children,
+                signature_types=self._resolve_signature_types(entry_func),
+                signature_type_roots=self._signature_type_roots(entry_func),
             )
             unresolved_count, max_depth = _summarize_subtree(root_node)
             return Flow(
@@ -374,6 +383,8 @@ class _FlowBuilder:
             call_site_line=call_site_line,
             call_kind=call_kind,
             bound_via=bound_via,
+            signature_types=self._resolve_signature_types(func),
+            signature_type_roots=self._signature_type_roots(func),
         )
 
     def _terminal_function_node(
@@ -404,6 +415,8 @@ class _FlowBuilder:
             call_site_line=call_site_line,
             call_kind=call_kind,
             bound_via=bound_via,
+            signature_types=self._resolve_signature_types(func),
+            signature_type_roots=self._signature_type_roots(func),
         )
 
     def _invoker_name(self) -> str:
@@ -424,6 +437,60 @@ class _FlowBuilder:
                 "_current_invoker_contract is None"
             )
         return invoker
+
+    def _resolve_signature_types(self, func: Function) -> tuple[TypeDef, ...]:
+        """Resolve the user-defined types for ``func``'s signature panel (spec §10.2).
+
+        Seeds from ``func.signature_type_canonical_names`` (the structs, enums,
+        and value types named directly by the parameters and returns, in order)
+        and walks each struct's ``member_type_canonical_names`` so the types a
+        named struct references through its fields are included too (e.g.
+        ``Pool.State``'s ``TickInfo``). De-duplicated by canonical identity — a
+        type reached by several paths appears once, and the ``seen`` set
+        terminates recursive/self-referential structs. Two DISTINCT types that
+        share a bare name (e.g. ``Pool.State`` and ``Position.State``) are both
+        kept; the renderer distinguishes them by their qualified name (§10.2). A
+        canonical name not in the registry (a type whose definition is in an
+        out-of-scope dependency) is skipped silently, matching the builder's
+        tolerance for missing linearized bases elsewhere.
+        """
+
+        registry = self._type_defs_by_canonical
+        if not func.signature_type_canonical_names or not registry:
+            return ()
+        seen_canonical: set[str] = set()
+        out: list[TypeDef] = []
+        queue: list[str] = list(func.signature_type_canonical_names)
+        while queue:
+            canonical = queue.pop(0)
+            if canonical in seen_canonical:
+                continue
+            seen_canonical.add(canonical)
+            td = registry.get(canonical)
+            if td is None:
+                continue
+            out.append(td)
+            queue.extend(td.member_type_canonical_names)
+        return tuple(out)
+
+    def _signature_type_roots(self, func: Function) -> tuple[str, ...]:
+        """Canonical names of the types named DIRECTLY in ``func``'s signature
+        (spec §10.2) — the roots of the panel's nested type tree.
+
+        The resolved subset of ``func.signature_type_canonical_names`` (those
+        present in the registry), de-duplicated, in parameter-then-return order.
+        The renderer roots the tree here and reaches member types through each
+        struct's ``member_type_canonical_names``.
+        """
+
+        registry = self._type_defs_by_canonical
+        roots: list[str] = []
+        seen: set[str] = set()
+        for canonical in func.signature_type_canonical_names:
+            if canonical in registry and canonical not in seen:
+                seen.add(canonical)
+                roots.append(canonical)
+        return tuple(roots)
 
     # ------------------------------------------------------------------
     # CallEdge dispatch (§11.9)

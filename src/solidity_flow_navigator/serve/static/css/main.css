@@ -35,6 +35,9 @@
      slightly darker cream than the node interior + dark-ink rule (§10.2). */
   --node-title-bg: #f1ede0;
   --node-title-rule: #2c2c2c;
+  /* v0.19 signature-type panel body — a touch lighter than the title cream so
+     the struct/enum source reads as a faint inset card (§10.2). */
+  --param-struct-bg: #f7f4ea;
 
   /* FunctionNode (modifier) */
   --node-mod-bg: #e8f0fa;
@@ -73,6 +76,11 @@
      blue, and the burnt-orange number token. Dark mode lifts it to #5fc9bf for
      contrast on the near-black panel. */
   --tok-call-arg: #1f8a82;
+  /* v0.19: nested member types (sub-structs) in the signature-type panel reuse
+     the "nested" teal — for their dropdown labels and where their name appears
+     inside the parent struct's source. var() resolves at use time, so this one
+     alias tracks the dark override of --tok-call-arg automatically. */
+  --tok-type-member: var(--tok-call-arg);
   --call-hover-bg: rgba(58, 109, 176, 0.12);
   --call-expanded-bg: rgba(90, 143, 196, 0.10);
   --call-expanded-edge: rgba(90, 143, 196, 0.40);
@@ -134,6 +142,7 @@
        not the desktop. Light-ink rule matches the node border weight. */
     --node-title-bg: #20242c;
     --node-title-rule: #c2c0b6;
+    --param-struct-bg: #262b34;
 
     --node-mod-bg: #1a2433;
     --node-mod-border: #6b94c8;
@@ -181,6 +190,7 @@
 
   --node-title-bg: #20242c;
   --node-title-rule: #c2c0b6;
+  --param-struct-bg: #262b34;
 
   --node-mod-bg: #1a2433;
   --node-mod-border: #6b94c8;
@@ -1326,6 +1336,110 @@ body.flow-page .flow-header {
   font-family: var(--font-sans);
   font-size: 11px;
   color: var(--fg-muted);
+}
+
+/* v0.19 signature-type panel (spec §10.2). A two-level collapsed disclosure
+   above the source body holding the full struct/enum definitions named by a
+   function's parameters/returns. Closed by default so struct-heavy signatures
+   don't inflate node height; the bodies reuse the `.src` Pygments palette but
+   are read-only reference (no call-line affordance). A rule separates the
+   panel from the function body below it. */
+.node-param-structs {
+  /* Symmetric top/bottom padding so the collapsed "type definitions" row sits
+     centered between the title-bar rule above and the panel's own rule below,
+     with breathing room from the title-bar line. */
+  padding-top: 0.6rem;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--node-title-rule);
+}
+
+/* Outer "type definitions:" dropdown — larger, bold, and colored in the
+   interactive blue accent so it reads as a header rather than muted chrome. */
+.node-param-structs-summary {
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--node-mod-border);
+  user-select: none;
+  list-style: none;
+}
+
+.node-param-structs-summary::-webkit-details-marker {
+  display: none;
+}
+
+.node-param-structs-summary::before {
+  content: "\25B8\00A0"; /* ▸ */
+}
+
+.node-param-structs[open] > .node-param-structs-summary::before {
+  content: "\25BE\00A0"; /* ▾ */
+}
+
+/* Inner per-type dropdown — the type name in the same purple the source uses
+   for user-defined type names, indented under the outer panel. */
+.param-struct-item {
+  margin: 0.4rem 0 0 0.85rem;
+}
+
+.param-struct-item-summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--tok-name);
+  user-select: none;
+  list-style: none;
+}
+
+.param-struct-item-summary::-webkit-details-marker {
+  display: none;
+}
+
+.param-struct-item-summary::before {
+  content: "\25B8\00A0"; /* ▸ */
+}
+
+.param-struct-item[open] > .param-struct-item-summary::before {
+  content: "\25BE\00A0"; /* ▾ */
+}
+
+/* Nested member types render above the struct's own source; each nested
+   .param-struct-item indents itself via its own left margin (recursive). */
+.param-struct-nested {
+  margin-top: 0.2rem;
+}
+
+/* Nested sub-structs read in the "nested" teal (v0.19): their dropdown labels
+   (at every nesting level, hence the descendant combinator — roots, the direct
+   children of .node-param-structs, keep the --tok-name purple) and the member
+   type names tagged inside the parent struct's source (.param-struct-ref). */
+.param-struct-nested .param-struct-item-summary,
+.param-struct-ref {
+  color: var(--tok-type-member);
+}
+
+/* When a struct's own source follows its nested member dropdowns, set it off
+   with a dashed rule so "these are the members" reads apart from "this is the
+   struct itself". */
+pre.param-struct-body--after-members {
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border-soft);
+}
+
+pre.param-struct-body {
+  margin: 0.35rem 0 0;
+  padding: 0.4rem 0.6rem;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+  background: var(--param-struct-bg);
+  border-radius: 3px;
+  overflow-x: auto;
 }
 
 .node-meta {

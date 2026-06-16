@@ -88,6 +88,11 @@ def _serialize_node(
     if isinstance(node, FunctionNode):
         d = asdict(node)
         d["source_html"] = highlight_solidity(node.source_code)
+        # Signature-type panel (spec §10.2): each struct/enum def carries its own
+        # Pygments HTML, mirroring source_html. asdict already turned the TypeDefs
+        # into dicts; inject the highlighted body alongside the raw source_code.
+        for t in d["signature_types"]:
+            t["source_html"] = highlight_solidity(t["source_code"])
         d["children"] = [_serialize_node(c, bindings_ctx) for c in node.children]
     else:
         d = asdict(node)
