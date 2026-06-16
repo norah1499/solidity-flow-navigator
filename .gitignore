@@ -17,6 +17,11 @@ src/solidity_flow_navigator/serve/static/css/pygments.css
 # Local working notes; deliberately not part of the published repo.
 HANDOFF.md
 
+# Design handoff bundle + brief for the index redesign — local reference material,
+# not source (prototype HTML/JS + screenshots; reimplemented in the real stack).
+design_handoff_index_redesign/
+DESIGN_BRIEF.md
+
 # Installed coding-assistant skills (e.g. `npx skills add`); local tooling, not source.
 .agents/
 skills-lock.json
