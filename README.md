@@ -28,6 +28,7 @@ The first job in any audit is reconstructing what actually happens when someone 
 - **Light or dark.** A header toggle sets the palette — Auto (follows your OS), Light, or Dark — so long audit sessions stay easy on the eyes. The choice is server-rendered: no flash on load, and your preference never leaves the machine.
 - **Bookmarks & recently-viewed.** Bookmark the entry points (and contracts) you keep returning to — they collect in a *Bookmarked* section at the top of the index, reachable from any scroll position via a floating shortcut. Toggling a bookmark happens in place, so the page doesn't lose your spot. Entry points you've already opened are tinted on the index so you can see your progress at a glance. It's all a first-party localhost cookie — no accounts, nothing leaves the machine — and the toggles still work with JavaScript disabled.
 - **It never silently lies.** When a call target can't be resolved statically (an interface with no bound implementation, `addr.call(...)`, computed-target Yul), the node is explicitly marked unresolved, with the reason. No guessing, no silent omissions. The auditor's trust in a Flow's completeness within its declared scope is the load-bearing property.
+- **Bind interfaces to implementations.** When a call exits through an interface (`IOracle(addr).price()`), pin the concrete contract that runs and SolFlow resolves into its body, at every call site across every Flow. Bind from the dropdown on any interface node, or from the **Bindings** panel on the index, then **Save** the set to `solflow.toml` so it persists across runs. A bound edge is an asserted assumption, not a static proof, so it stays badged as such.
 - **Scope you control.** Inline a dependency, stub a dense in-tree math library, or exclude test and mock contracts, via `solflow.toml` or CLI flags (see [Configuration](#configuration)).
 - **Local and private.** Analysis runs entirely on your machine and the server binds only to `127.0.0.1`. Audit code under NDA is never uploaded anywhere.
 
@@ -46,7 +47,7 @@ solc-select install <version> && solc-select use <version>
 
 For the latest development version: `pipx install git+https://github.com/norah1499/solidity-flow-navigator`.
 
-To uninstall, `pipx uninstall solflow` removes the tool and all its bundled dependencies; SolFlow writes nothing outside its own install directory. `solc-select` and its downloaded compilers are a separate install, removable with `pipx uninstall solc-select`.
+To uninstall, `pipx uninstall solflow` removes the tool and all its bundled dependencies; SolFlow writes nothing outside its own install directory, apart from the `solflow.toml` in your working directory that the Bindings panel's **Save** writes when you click it. `solc-select` and its downloaded compilers are a separate install, removable with `pipx uninstall solc-select`.
 
 ### Updating
 
