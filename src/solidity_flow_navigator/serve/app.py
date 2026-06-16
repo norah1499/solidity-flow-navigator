@@ -50,7 +50,7 @@ from .serializer import serialize_flow
 
 # Group labels are exposed in the index template; keeping them here so the
 # template doesn't hardcode strings that have meaning in the categorization.
-GROUP_APPLICATION = "Application"
+GROUP_APPLICATION = "Project"
 GROUP_TESTS = "Tests"
 GROUP_DEPENDENCIES = "Dependencies"
 
@@ -108,7 +108,7 @@ class _EntryPointEntry:
     max_depth: int
     # v0.11.0 per-entry modifier chips (spec §8.3): names of the Flow root's
     # modifier children, in application order. Populated for every entry;
-    # the template renders chips on Mutating rows only (the deliberate
+    # the template renders chips on Writes rows only (the deliberate
     # asymmetry recorded in §8.3 — no chips on a mutating row IS the
     # unprotected-entry-point signal).
     modifier_names: tuple[str, ...]
@@ -124,12 +124,12 @@ class _ContractEntry:
     source_path: str
     # Partitioned per spec §8.3: non-view, non-pure roots vs view-or-pure roots.
     # Empty tuples render nothing — the template omits the section header rather
-    # than emitting a "Read-only (none)" placeholder.
+    # than emitting a "Reads (none)" placeholder.
     mutating_entry_points: tuple[_EntryPointEntry, ...]
     read_only_entry_points: tuple[_EntryPointEntry, ...]
     # v0.8.0 pre-computed cardinalities so the template doesn't have to call
     # ``|length`` filters on each render; the per-section count suffix
-    # (``Mutating · N``) reads these directly. Spec §8.3 per-section totals.
+    # (``Writes · N``) reads these directly. Spec §8.3 per-section totals.
     mutating_count: int
     read_only_count: int
     # v0.18.0 (§8.3): sum of node_count across this contract's entry points;
@@ -362,7 +362,7 @@ THEME_COOKIE = "solflow_theme"
 THEME_VALUES = ("auto", "light", "dark")
 THEME_MAX_AGE = 60 * 60 * 24 * 365  # one year
 
-# v0.15.0 bookmarks (spec §8.3). The per-row / per-heading ribbon toggles hit
+# v0.15.0 pins (spec §8.3). The per-row / per-heading pushpin toggles hit
 # ``/bookmark/<kind>/<id>``, which adds or removes the id from this first-party,
 # localhost-only cookie. The value is a JSON list of prefixed ids — ``e:<url_id>``
 # for an entry point, ``c:<contract>`` for a contract — read back per request and
@@ -603,7 +603,7 @@ def create_app(
         # control. An absent or unrecognized cookie falls back to Auto.
         cookie = request.cookies.get(THEME_COOKIE)
         forced = cookie if cookie in ("light", "dark") else None
-        # v0.15.0: the set of bookmarked ids drives the filled-vs-outline ribbon
+        # v0.15.0: the set of pinned ids drives the filled-vs-outline pushpin
         # state on every contract heading, entry row, and the Flow-page toggle.
         # A frozenset so templates can do O(1) ``("e:" + url_id) in bookmarked_ids``.
         bookmarked_ids = frozenset(

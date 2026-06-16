@@ -322,7 +322,7 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
 /* v0.8.0 index header: page-level title with repo_path subtitle and three
    right-aligned count widgets. Replaces the v0.7.0 `.index-summary` line. */
 .index-header {
-  margin: 0 0 1rem;
+  margin: 0 0 0.75rem;
 }
 
 /* v0.16.0 index filter (spec §8.3): a text box that narrows the listing below.
@@ -331,12 +331,35 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
    `[hidden] { display: none }` rule still wins for no-JS users — an author
    `display: flex` on the bare selector would override it and leak the box. */
 .index-filter {
-  margin: 0 0 1rem;
   align-items: center;
   gap: 0.5rem;
 }
 .index-filter:not([hidden]) {
   display: flex;
+}
+
+/* The first contract group's heading shares its row with the filter, so the
+   control sits with the listing it narrows rather than floating in a band of its
+   own. The row is sticky (opaque page-colored bar + hairline) so the filter stays
+   in reach while the listing scrolls. */
+.index-group .group-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  flex-wrap: wrap;
+  margin: 0 0 1.25rem;
+  padding: 0.5rem 0;
+  border-bottom: 0.5px solid var(--border-soft);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg-page);
+}
+.index-group .group-head-row .group-heading {
+  margin: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 .index-filter-input {
   font-family: var(--font-mono);
@@ -407,6 +430,12 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   color: var(--fg-muted);
 }
 
+/* the untraced count is the auditor's "trust budget" — tint it red (the same
+   family as the N unr pills / UnresolvedNode borders) when it is non-zero. */
+.count-item .count-value.is-untraced {
+  color: var(--node-unresolved-border);
+}
+
 /* v0.11.0: the .index-subtitle rule is gone with the duplicated repo-path
    subtitle (spec §8.3) — the path renders once, in the site header. */
 
@@ -414,9 +443,9 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
    chrome (Scope, separators, section labels) in --fg-muted; glob values
    and the literal "none" in default text color (spec §8.3). */
 .index-scope {
-  /* v0.12.0: bottom gap moved to .index-legend, which now ends the
-     chrome block (legend renders unconditionally directly below). */
-  margin: 0 0 0.15rem;
+  /* the legend moved to the foot of the page, so the scope line now ends the
+     top chrome block — give it a clean gap to the panels below. */
+  margin: 0 0 1.5rem;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-muted);
@@ -441,7 +470,7 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
    self-verifying against the rows below; this block only handles line
    spacing and key sizing in the legend context. */
 .index-legend {
-  margin: 0 0 2rem;
+  margin: 1.5rem 0 0.75rem;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-muted);
@@ -468,8 +497,8 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  margin-bottom: 0.6rem;
-  padding-bottom: 0.6rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.75rem;
   border-bottom: 0.5px solid var(--border-soft);
 }
 .index-bindings-head .group-heading {
@@ -516,7 +545,7 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-muted);
-  margin: 0 0 0.85rem;
+  margin: 0 0 1rem;
   line-height: 1.7;
 }
 .bindings-list {
@@ -590,13 +619,13 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
 .group-heading {
   font-size: 18px;
   font-weight: 500;
-  margin: 0 0 1rem;
+  margin: 0 0 1.25rem;
   padding-bottom: 0.5rem;
   border-bottom: 0.5px solid var(--border-soft);
 }
 
 .contract-block {
-  margin: 0 0 1.75rem;
+  margin: 0 0 2rem;
 }
 
 .contract-name {
@@ -628,7 +657,7 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   font-size: 12px;
   font-weight: 500;
   color: var(--fg-muted);
-  margin: 0.5rem 0 0.25rem;
+  margin: 0.8rem 0 0.3rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -678,7 +707,7 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   flex-shrink: 0;
 }
 
-/* v0.15.0 bookmarks (spec §8.3): a ribbon toggle rendered as a server-side
+/* v0.15.0 pins (spec §8.3): a pushpin toggle rendered as a server-side
    link + inline SVG (no JavaScript). Outline in muted chrome when off; filled
    with --tok-number when on — the one warm color already in the palette, reused
    so no new accent enters the UI and it themes via the token's three palette
@@ -695,7 +724,9 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
 .bookmark-ico {
   fill: none;
   stroke: var(--fg-muted);
-  stroke-width: 1.4;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+  stroke-linecap: round;
 }
 .bookmark-toggle:hover .bookmark-ico,
 .bookmark-toggle:focus-visible .bookmark-ico {
@@ -704,6 +735,7 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
 .bookmark-toggle.is-on .bookmark-ico {
   fill: var(--tok-number);
   stroke: var(--tok-number);
+  stroke-width: 1.2;
 }
 /* v0.16.0: scale the flow-header bookmark toggle up so it reads in proportion
    with the enlarged header controls (← index / Expand all / etc.). The CSS size

@@ -1,6 +1,6 @@
 // Progressive enhancement for the index page (spec §8.3).
 //
-// The bookmark ribbon toggles are real server-side links to /bookmark/<kind>/<id>
+// The pin toggles are real server-side links to /bookmark/<kind>/<id>
 // and work with no JavaScript (the no-JS path reloads the page and returns to the
 // clicked row). This script intercepts the click so the toggle happens IN PLACE:
 // persist via fetch, refresh the Bookmarked section / shortcut / icon states from
@@ -24,8 +24,8 @@
       if (on === undefined) return;
       a.classList.toggle("is-on", on);
       a.setAttribute("aria-pressed", on ? "true" : "false");
-      a.setAttribute("title", on ? "Remove bookmark" : "Bookmark");
-      a.setAttribute("aria-label", on ? "Remove bookmark" : "Bookmark");
+      a.setAttribute("title", on ? "Unpin" : "Pin");
+      a.setAttribute("aria-label", on ? "Unpin" : "Pin");
     });
   }
 
@@ -143,6 +143,12 @@
       block.style.display = !q || hasVisibleRow(block) ? "" : "none";
     });
     document.querySelectorAll(".index-group").forEach(function (group) {
+      // The group hosting the (sticky) filter never hides — otherwise filtering
+      // to a term only present in a later group would take the filter box with it.
+      if (group.querySelector(".index-filter")) {
+        group.style.display = "";
+        return;
+      }
       group.style.display = !q || hasVisibleRow(group) ? "" : "none";
     });
     var count = document.getElementById("entry-filter-count");

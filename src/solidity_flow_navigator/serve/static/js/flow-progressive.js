@@ -2006,7 +2006,7 @@
     });
   }
 
-  // v0.15.0: toggle the entry's bookmark in place rather than reloading the flow
+  // v0.15.0: toggle the entry's pin in place rather than reloading the flow
   // page (a reload would re-run the entire dagre layout). The toggle is a plain
   // server-side link (no-JS fallback); here we persist via fetch and flip the
   // icon, leaving the graph untouched.
@@ -2020,7 +2020,7 @@
         .then(() => {
           bookmarkToggle.classList.toggle("is-on", on);
           bookmarkToggle.setAttribute("aria-pressed", on ? "true" : "false");
-          const label = on ? "Remove bookmark" : "Bookmark this entry point";
+          const label = on ? "Unpin" : "Pin this entry point";
           bookmarkToggle.setAttribute("title", label);
           bookmarkToggle.setAttribute("aria-label", label);
         })

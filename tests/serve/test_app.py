@@ -104,7 +104,7 @@ def test_index_status_and_groups(client_unfiltered: FlaskClient) -> None:
     rv = client_unfiltered.get("/")
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
-    assert ">Application<" in body
+    assert ">Project<" in body
     assert ">Tests<" in body
     assert ">Dependencies<" in body
 
@@ -164,9 +164,9 @@ def test_index_sub_groups_both_sections_for_mixed_contract(
     body = rv.get_data(as_text=True)
     block = _extract_contract_block(body, "ERC4626")
     # v0.8.0: section headings now carry a "· N" count suffix per spec §8.3,
-    # so the literal `>Mutating<` shape no longer appears.
-    assert ">Mutating · " in block, "Mutating section missing from ERC4626 block"
-    assert ">Read-only · " in block, "Read-only section missing from ERC4626 block"
+    # so the literal `>Writes<` shape no longer appears.
+    assert ">Writes · " in block, "Writes section missing from ERC4626 block"
+    assert ">Reads · " in block, "Reads section missing from ERC4626 block"
 
 
 def test_index_omits_empty_section_for_single_kind_contract(
@@ -191,10 +191,10 @@ def test_index_omits_empty_section_for_single_kind_contract(
             m = len(contract.mutating_entry_points)
             r = len(contract.read_only_entry_points)
             if m and not r:
-                single_kind = (contract.name, "Mutating")
+                single_kind = (contract.name, "Writes")
                 break
             if r and not m:
-                single_kind = (contract.name, "Read-only")
+                single_kind = (contract.name, "Reads")
                 break
         if single_kind is not None:
             break
@@ -203,7 +203,7 @@ def test_index_omits_empty_section_for_single_kind_contract(
         "list; index data shape may have changed"
     )
     contract_name, present = single_kind
-    absent = "Read-only" if present == "Mutating" else "Mutating"
+    absent = "Reads" if present == "Writes" else "Writes"
 
     rv = client.get("/")
     assert rv.status_code == 200
@@ -448,7 +448,7 @@ def test_index_header_renders_three_counts(client: FlaskClient) -> None:
     assert '<header class="index-header">' in body
     assert '<span class="count-label">contracts</span>' in body
     assert '<span class="count-label">entry points</span>' in body
-    assert '<span class="count-label">unresolved</span>' in body
+    assert '<span class="count-label">untraced</span>' in body
 
 
 def test_index_drops_repo_path_subtitle_and_contract_prefix(
@@ -558,8 +558,8 @@ def test_index_modifier_chips_on_mutating_rows_only(client: FlaskClient) -> None
     assert (
         ">onlyOwner</span>" in owned_block
     ), "the onlyOwner chip must carry the modifier's name."
-    # No chips inside any Read-only section, anywhere on the page.
-    for section_start in [m.start() for m in re.finditer(r">Read-only · ", body)]:
+    # No chips inside any Reads section, anywhere on the page.
+    for section_start in [m.start() for m in re.finditer(r">Reads · ", body)]:
         section_end = body.find("</section>", section_start)
         assert "entry-mod-chip" not in body[section_start:section_end], (
             "read-only rows must not render modifier chips (v0.11.0 §8.3 "
@@ -601,8 +601,8 @@ def test_index_header_counts_match_build_index_totals(
         f'<span class="count-value">{total_eps}</span>' in body
     ), f"entry points count {total_eps} missing from header"
     assert (
-        f'<span class="count-value">{total_unresolved}</span>' in body
-    ), f"unresolved count {total_unresolved} missing from header"
+        f'<span class="count-value is-untraced">{total_unresolved}</span>' in body
+    ), f"untraced count {total_unresolved} missing from header"
 
 
 def test_index_scope_line_renders_excluded_and_stub_paths(
@@ -681,8 +681,8 @@ def test_index_renders_chips_legend_below_scope_line(client: FlaskClient) -> Non
     assert '<span class="meta-unresolved">2 unr</span>' in legend
     assert '<span class="meta-depth">d3</span>' in legend
     # The three glosses.
-    assert "gate on a mutating entry, none = unguarded" in legend
-    assert "unresolved call sites" in legend
+    assert "function with a modifier, none = no modifier" in legend
+    assert "calls that couldn't be traced" in legend
     assert "max call depth" in legend
     # Position: legend follows the scope summary line.
     assert body.index('class="index-scope"') < body.index('class="index-legend"')
@@ -700,21 +700,21 @@ def test_index_section_count_suffix_matches_entry_count(
     groups, _, _, _ = build_index(solmate_facts, solmate_flows)
     rv = client.get("/")
     body = rv.get_data(as_text=True)
-    asserted_at_least_one_of_each = {"Mutating": False, "Read-only": False}
+    asserted_at_least_one_of_each = {"Writes": False, "Reads": False}
     for group in groups:
         for contract in group.contracts:
             if contract.mutating_count:
-                expected = f"Mutating · {contract.mutating_count}"
+                expected = f"Writes · {contract.mutating_count}"
                 assert expected in body, (
                     f"section heading {expected!r} missing for " f"{contract.name}"
                 )
-                asserted_at_least_one_of_each["Mutating"] = True
+                asserted_at_least_one_of_each["Writes"] = True
             if contract.read_only_count:
-                expected = f"Read-only · {contract.read_only_count}"
+                expected = f"Reads · {contract.read_only_count}"
                 assert expected in body, (
                     f"section heading {expected!r} missing for " f"{contract.name}"
                 )
-                asserted_at_least_one_of_each["Read-only"] = True
+                asserted_at_least_one_of_each["Reads"] = True
     assert all(asserted_at_least_one_of_each.values()), (
         "fixture exercised only one bucket; coverage of the section count "
         "suffix is incomplete"
@@ -765,8 +765,8 @@ def test_index_per_entry_metadata_renders_in_all_four_cases(
                     if ep.unresolved_count > 0:
                         unr_tag = (
                             f'<span class="meta-unresolved" '
-                            f'title="{ep.unresolved_count} unresolved call '
-                            f'site(s) in this flow — rendered as red pills">'
+                            f"title=\"{ep.unresolved_count} call(s) that couldn't "
+                            f'be traced in this Flow — shown as red pills">'
                             f"{ep.unresolved_count} unr</span>"
                         )
                         assert (
@@ -1511,7 +1511,7 @@ def test_site_header_brand_is_solflow_title_tag_keeps_full_name(
     assert re.search(r'<a class="site-title"[^>]*>solflow</a>', body), (
         "site-header brand must read 'solflow' (v0.10.4 header-only " "branding)."
     )
-    assert "<title>Index — Solidity Flow Navigator</title>" in body, (
+    assert "<title>Overview — Solidity Flow Navigator</title>" in body, (
         "browser <title> must keep the full project name — the brand "
         "change is header-only."
     )
@@ -1723,13 +1723,13 @@ def test_bookmark_blocks_open_redirect(client: FlaskClient) -> None:
 def test_index_bookmarked_section_renders_for_known_ids(
     bookmark_client: FlaskClient,
 ) -> None:
-    """With an entry and a contract bookmarked, the index renders a `Bookmarked`
+    """With an entry and a contract pinned, the index renders a `Pinned`
     section and the corresponding row toggles show the filled (is-on) state."""
     bookmark_client.get(f"/bookmark/entry/{urllib.parse.quote(_BM_ENTRY, safe='')}")
     bookmark_client.get(f"/bookmark/contract/{_BM_CONTRACT}")
     body = bookmark_client.get("/").get_data(as_text=True)
     assert 'class="index-bookmarked"' in body
-    assert ">Bookmarked</h2>" in body
+    assert ">Pinned</h2>" in body
     assert body.count('class="bookmark-link"') >= 2
     assert "bookmark-toggle is-on" in body
 
