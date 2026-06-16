@@ -453,6 +453,136 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   font-size: 11px;
 }
 
+/* v0.18.0 Bindings panel (spec §8.3, §13.2): a dedicated index panel listing
+   bindable interfaces with a per-interface dropdown (a real GET form to /bind/)
+   and a Save-to-solflow.toml button (POST /bindings/save). index.js collapses a
+   long list behind a "Show all" toggle and auto-applies on change; with JS off
+   the full list + "Set" buttons render server-side. Native <select>/<button>
+   chrome tracks the palette via the :root color-scheme declaration. */
+.index-bindings {
+  margin: 0 0 3rem;
+}
+.index-bindings-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 0.5px solid var(--border-soft);
+}
+.index-bindings-head .group-heading {
+  margin: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+  flex: 1 1 auto;
+}
+.bindings-save {
+  margin: 0;
+}
+.bindings-save-btn {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--fg-text);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .bindings-save-btn {
+    transition: background-color 120ms ease, color 120ms ease;
+  }
+}
+.bindings-save-btn:hover {
+  background: var(--border-strong);
+  color: var(--bg-surface);
+}
+.bindings-result {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin: 0.4rem 0 0;
+}
+.bindings-result.is-ok {
+  color: var(--tok-string);
+}
+.bindings-result.is-error {
+  color: var(--node-unresolved-border);
+}
+.bindings-hint {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin: 0 0 0.85rem;
+  line-height: 1.7;
+}
+.bindings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.bindings-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.3rem 0;
+}
+/* Fixed-width interface column so every dropdown starts at the same x (the
+   arrow + select are the next flex item, so a constant column left-aligns
+   them); names wider than the column wrap rather than push the select right. */
+.bindings-iface {
+  flex: 0 0 17rem;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.bindings-iface .src {
+  color: var(--tok-keyword);
+}
+.bindings-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+}
+.bindings-arrow {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+}
+.bindings-row.is-bound .bindings-arrow {
+  color: var(--tok-number);
+}
+.bindings-set {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.bindings-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-left: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.bindings-showall {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-muted);
+  background: none;
+  border: 0;
+  padding: 0.5rem 0 0;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.bindings-showall:hover {
+  color: var(--fg-text);
+}
+
 .index-group {
   margin: 0 0 3rem;
 }

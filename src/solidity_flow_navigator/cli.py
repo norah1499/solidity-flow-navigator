@@ -206,7 +206,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "concrete in-tree contract CONTRACT at its call sites (spec §13.2). "
             "Repeatable; a later --bind for the same interface wins. Appends to "
             "any [bindings] table in the config file. Bindings can also be set "
-            "and saved live from the index page's Bindings panel."
+            "live from the index page's Bindings panel and saved back to the "
+            "config file from there."
         ),
     )
 
@@ -316,12 +317,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     flows = build_flows(facts, scope)
 
+    # The file the index Bindings panel Save control writes to (spec §13.2,
+    # v0.18.0): the explicit --config path when given, else solflow.toml in the
+    # working directory — the same file the default config lookup reads.
+    config_path = (
+        Path(args.config) if args.config else Path.cwd() / DEFAULT_CONFIG_FILENAME
+    )
+
     return _serve(
         facts,
         flows,
         port=args.port,
         expand_all=args.expand_all,
         scope=scope,
+        config_path=config_path,
     )
 
 
@@ -475,13 +484,20 @@ def _serve(
     port: int | None,
     expand_all: bool = False,
     scope: Scope | None = None,
+    config_path: Path | None = None,
 ) -> int:
     """Start the local server. Selects a port (auto or explicit) and binds."""
     chosen = _select_port(port)
     if chosen is None:
         return 1
 
-    app = create_app(facts, flows, expand_all=expand_all, scope=scope)
+    app = create_app(
+        facts,
+        flows,
+        expand_all=expand_all,
+        scope=scope,
+        config_path=config_path,
+    )
     print(
         f"Solidity Flow Navigator running at http://{SERVER_HOST}:{chosen}",
         flush=True,

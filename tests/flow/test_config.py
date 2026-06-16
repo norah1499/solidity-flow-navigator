@@ -23,6 +23,7 @@ from solidity_flow_navigator.flow.config import (
     PartialScope,
     apply_partial,
     load_partial_scope_from_toml,
+    save_interface_bindings_to_toml,
 )
 from solidity_flow_navigator.flow.scope import DEFAULT_SCOPE, Scope
 
@@ -429,3 +430,97 @@ def test_apply_partial_over_empty_base() -> None:
     assert result.exclude_paths == ("src/test/**",)
     assert result.exclude_contracts == ()
     assert result.inline_libraries == ("forge-std",)
+
+
+# ---------------------------------------------------------------------------
+# save_interface_bindings_to_toml (v0.18.0, §13.2) — the index panel's Save.
+# This is the one place the tool writes to the working directory; the writer
+# is surgical (touches only [bindings]) and validates a round-trip before any
+# atomic write. These pin that contract.
+# ---------------------------------------------------------------------------
+
+
+def test_save_creates_file_when_absent(tmp_path: Path) -> None:
+    path = tmp_path / "solflow.toml"
+    save_interface_bindings_to_toml(path, (("IOracle", "ChainlinkOracle"),))
+    assert path.exists()
+    # Round-trips through the reader to exactly the saved binding.
+    p = load_partial_scope_from_toml(path)
+    assert p.interface_bindings == (("IOracle", "ChainlinkOracle"),)
+
+
+def test_save_surgical_preserves_scope_and_comments(tmp_path: Path) -> None:
+    path = _write_toml(
+        tmp_path,
+        "# my config\n"
+        "[scope]\n"
+        'exclude_paths = ["**/*.t.sol"]  # keep tests out\n'
+        "\n"
+        "[bindings]\n"
+        'IOld = "OldImpl"\n',
+    )
+    save_interface_bindings_to_toml(path, (("INew", "NewImpl"),))
+    text = path.read_text()
+    # The [scope] table, its inline comment, and the leading comment survive.
+    assert "# my config" in text
+    assert "keep tests out" in text
+    # [bindings] is replaced, not appended (the old key is gone, the new present).
+    assert 'INew = "NewImpl"' in text
+    assert "OldImpl" not in text
+    assert text.count("[bindings]") == 1
+    # And both tables still read back correctly.
+    p = load_partial_scope_from_toml(path)
+    assert p.interface_bindings == (("INew", "NewImpl"),)
+    assert p.exclude_paths == ("**/*.t.sol",)
+
+
+def test_save_inserts_bindings_table_when_absent(tmp_path: Path) -> None:
+    path = _write_toml(tmp_path, '[scope]\nexclude_paths = ["x"]\n')
+    save_interface_bindings_to_toml(path, (("IFoo", "Bar"),))
+    text = path.read_text()
+    assert "[scope]" in text
+    assert "[bindings]" in text
+    p = load_partial_scope_from_toml(path)
+    assert p.exclude_paths == ("x",)
+    assert p.interface_bindings == (("IFoo", "Bar"),)
+
+
+def test_save_empty_bindings_writes_empty_table(tmp_path: Path) -> None:
+    path = tmp_path / "solflow.toml"
+    save_interface_bindings_to_toml(path, ())
+    text = path.read_text()
+    assert "[bindings]" in text
+    # An empty table reads back as "present but empty" → () (not None).
+    p = load_partial_scope_from_toml(path)
+    assert p.interface_bindings == ()
+
+
+def test_save_dedupes_last_wins_and_sorts(tmp_path: Path) -> None:
+    path = tmp_path / "solflow.toml"
+    save_interface_bindings_to_toml(
+        path, (("IB", "First"), ("IA", "Y"), ("IB", "Second"))
+    )
+    p = load_partial_scope_from_toml(path)
+    # Sorted by key; the later IB binding wins.
+    assert p.interface_bindings == (("IA", "Y"), ("IB", "Second"))
+
+
+def test_save_quotes_non_bare_key(tmp_path: Path) -> None:
+    # A Solidity identifier may contain ``$``, which is not a TOML bare-key
+    # character — the writer must quote such a key, and it must round-trip.
+    path = tmp_path / "solflow.toml"
+    save_interface_bindings_to_toml(path, (("I$Weird", "Impl"),))
+    text = path.read_text()
+    assert '"I$Weird" = "Impl"' in text
+    p = load_partial_scope_from_toml(path)
+    assert p.interface_bindings == (("I$Weird", "Impl"),)
+
+
+def test_save_raises_oserror_when_directory_missing(tmp_path: Path) -> None:
+    # The atomic write targets a temp file in the destination directory; a
+    # missing directory surfaces as OSError (the Save route turns this into a
+    # loud ?saved=error rather than a 500). The target file is never created.
+    target = tmp_path / "nope" / "solflow.toml"
+    with pytest.raises(OSError):
+        save_interface_bindings_to_toml(target, (("IFoo", "Bar"),))
+    assert not target.exists()

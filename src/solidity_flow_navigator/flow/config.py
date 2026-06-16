@@ -19,7 +19,10 @@ solflow.toml isn't present" (skip silently) from "the user passed
 errors raise ``ConfigError`` with a message naming the path or key.
 """
 
+import os
+import re
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -229,3 +232,158 @@ def _extract_string_map(
             )
         pairs.append((key, value))
     return tuple(pairs)
+
+
+# TOML bare keys are ``[A-Za-z0-9_-]+`` (the unquoted form). Interface names are
+# Solidity identifiers, which also admit ``$``; such a key is emitted quoted.
+_BARE_KEY_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+
+
+def _toml_basic_string(value: str) -> str:
+    """Render ``value`` as a TOML basic (double-quoted) string.
+
+    Backslash and double-quote are the only characters that need escaping for
+    the identifier-shaped names solflow writes; the general control-character
+    cases TOML also escapes cannot occur in a Solidity contract name.
+    """
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _toml_key(name: str) -> str:
+    """Render ``name`` as a TOML key — bare when it qualifies, else quoted."""
+    if _BARE_KEY_RE.match(name):
+        return name
+    return _toml_basic_string(name)
+
+
+def _render_bindings_table(items: list[tuple[str, str]]) -> str:
+    """Render an ``[bindings]`` table (header + one line per pair) as TOML text.
+
+    Always emits the header, so an empty binding set round-trips to a present-
+    but-empty table (which the reader treats as "no bindings", §11.2).
+    """
+    lines = ["[bindings]"]
+    for iface, contract in items:
+        lines.append(f"{_toml_key(iface)} = {_toml_basic_string(contract)}")
+    return "\n".join(lines) + "\n"
+
+
+def _splice_bindings_table(existing: str, block: str) -> str:
+    """Return ``existing`` with its ``[bindings]`` table replaced by ``block``.
+
+    Surgical: only the ``[bindings]`` table span is touched — every other line
+    (the ``[scope]`` table, comments, blank lines, formatting) is preserved.
+    The span runs from the ``[bindings]`` header to the line before the next
+    table header (``[...]`` / ``[[...]]``) or end of file. When the file has no
+    ``[bindings]`` table, ``block`` is appended after a blank-line separator.
+    ``block`` already ends with a newline.
+    """
+    lines = existing.splitlines(keepends=True)
+
+    def _is_header(line: str) -> bool:
+        return line.split("#", 1)[0].lstrip().startswith("[")
+
+    start = None
+    for i, line in enumerate(lines):
+        if line.split("#", 1)[0].strip() == "[bindings]":
+            start = i
+            break
+
+    if start is None:
+        prefix = existing
+        if prefix and not prefix.endswith("\n"):
+            prefix += "\n"
+        if prefix.strip():  # separate from existing content with a blank line
+            prefix += "\n"
+        return prefix + block
+
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if _is_header(lines[j]):
+            end = j
+            break
+    before = "".join(lines[:start])
+    after = "".join(lines[end:])
+    result = before + block
+    if after.strip():
+        result += "\n" + after  # blank-line separator before the next table
+    return result
+
+
+def save_interface_bindings_to_toml(
+    path: Path, bindings: tuple[tuple[str, str], ...]
+) -> None:
+    """Write the interface ``[bindings]`` table to ``path`` (spec §13.2, v0.18.0).
+
+    This is the single point where solflow writes to the working directory: the
+    index page's Bindings panel Save control persists the current binding set so
+    it survives a server restart. The tool still never writes source or contract
+    files, and nothing leaves the machine — P5 (no upload) is unaffected.
+
+    Surgical by design. When ``path`` already exists, only the ``[bindings]``
+    table is replaced (or appended when absent); the ``[scope]`` table, comments,
+    and formatting elsewhere are preserved (see ``_splice_bindings_table``). When
+    ``path`` does not exist a minimal file containing just the table is created.
+
+    Bindings are de-duplicated last-wins (matching ``binding_for``) and written
+    in sorted order for a stable, diff-friendly file. The rendered text is parsed
+    with ``tomllib`` and the round-tripped ``[bindings]`` table is compared
+    against the intended map BEFORE anything is written; a parse error or
+    mismatch raises ``ConfigError`` and leaves ``path`` untouched. The write
+    itself is atomic (temp file in the same directory + ``os.replace``) so a
+    crash mid-write cannot truncate an existing config.
+
+    Raises:
+        ConfigError: the existing file cannot be decoded as UTF-8, or the
+            rendered file would not parse back to the intended bindings (a
+            guard against producing a corrupt config).
+        OSError: the atomic write failed (e.g. the target directory does not
+            exist or is not writable). Propagated for the caller to surface.
+    """
+    deduped: dict[str, str] = {}
+    for iface, contract in bindings:
+        deduped[iface] = contract
+    items = sorted(deduped.items())
+
+    block = _render_bindings_table(items)
+    if path.exists():
+        try:
+            existing = path.read_text(encoding="utf-8")
+        except (OSError, ValueError) as exc:
+            raise ConfigError(
+                f"refusing to write {path}: cannot read existing file ({exc})"
+            ) from exc
+        new_text = _splice_bindings_table(existing, block)
+    else:
+        new_text = block
+
+    # Validate the rendered text round-trips to exactly the intended bindings
+    # before touching the file on disk.
+    try:
+        parsed = tomllib.loads(new_text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(
+            f"refusing to write {path}: rendered TOML is invalid ({exc})"
+        ) from exc
+    if parsed.get("bindings", {}) != deduped:
+        raise ConfigError(
+            f"refusing to write {path}: [bindings] did not round-trip "
+            "(an existing key or formatting collides with the save)"
+        )
+
+    # Atomic write: a temp file in the target directory, then os.replace, so an
+    # interrupted write cannot leave a half-written config.
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=".solflow-toml-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(new_text)
+        os.replace(tmp_name, path)
+    except OSError:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise

@@ -38,8 +38,9 @@ from markupsafe import Markup
 
 from ..analysis.types import RepoFacts
 from ..flow.builder import build_flows
+from ..flow.config import ConfigError, save_interface_bindings_to_toml
 from ..flow.scope import DEFAULT_SCOPE, Scope
-from ..flow.types import Flow, FunctionNode
+from ..flow.types import Flow, FlowNode, FunctionNode
 from .highlight import highlight_signature, write_pygments_css
 from .serializer import serialize_flow
 
@@ -111,6 +112,10 @@ class _EntryPointEntry:
     # asymmetry recorded in §8.3 — no chips on a mutating row IS the
     # unprotected-entry-point signal).
     modifier_names: tuple[str, ...]
+    # v0.18.0 (§8.3): total nodes in this entry's fully-materialized Flow tree
+    # (root + every subnode, all types). The index orders entry points within a
+    # section by this (heaviest first) and sums it per contract.
+    node_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,12 +132,64 @@ class _ContractEntry:
     # (``Mutating · N``) reads these directly. Spec §8.3 per-section totals.
     mutating_count: int
     read_only_count: int
+    # v0.18.0 (§8.3): sum of node_count across this contract's entry points;
+    # the index sorts contracts by it (heaviest call surface first).
+    node_count: int
 
 
 @dataclass(frozen=True, slots=True)
 class _GroupEntry:
     label: str
     contracts: tuple[_ContractEntry, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _BindingEntry:
+    """One row of the index Bindings panel (spec §8.3, §13.2, v0.18.0).
+
+    ``candidates`` are the concrete contracts the dropdown offers (same set the
+    Flow-page node dropdown uses, §13.2); ``bound_to`` is the currently selected
+    contract or None (unbound); ``call_sites`` is how many high-level call sites
+    target this interface — the panel surfaces the busiest first.
+    """
+
+    interface: str
+    candidates: tuple[str, ...]
+    bound_to: str | None
+    call_sites: int
+
+
+def _build_binding_entries(
+    candidates_by_iface: dict[str, tuple[str, ...]],
+    iface_sites: dict[str, int],
+    bound: dict[str, str],
+) -> tuple[_BindingEntry, ...]:
+    """Build the ordered index Bindings panel rows (spec §8.3, v0.18.0).
+
+    One row per interface that has high-level call sites and is bindable — it has
+    at least one candidate contract, or a binding is already set for it (so a
+    stale or out-of-scope binding stays visible and clearable). Interfaces with
+    call sites but no in-scope implementer and no binding (e.g. a cheatcode
+    interface) are omitted: the panel can offer nothing for them, and they remain
+    bindable via ``--bind``. Sorted by call-site count descending, then name, so
+    the highest-impact interfaces land in the panel's initial (un-expanded) slice.
+    """
+    entries: list[_BindingEntry] = []
+    for iface in set(candidates_by_iface) | set(bound):
+        candidates = candidates_by_iface.get(iface, ())
+        bound_to = bound.get(iface)
+        if not candidates and bound_to is None:
+            continue
+        entries.append(
+            _BindingEntry(
+                interface=iface,
+                candidates=candidates,
+                bound_to=bound_to,
+                call_sites=iface_sites.get(iface, 0),
+            )
+        )
+    entries.sort(key=lambda e: (-e.call_sites, e.interface))
+    return tuple(entries)
 
 
 def _contract_source_paths(facts: RepoFacts) -> dict[str, str]:
@@ -145,6 +202,22 @@ def _contract_source_paths(facts: RepoFacts) -> dict[str, str]:
     return {c.name: c.source_location.filename_relative for c in facts.contracts}
 
 
+def _flow_node_count(node: FlowNode) -> int:
+    """Total nodes in a Flow's fully-materialized tree (root + every subnode).
+
+    Counts every node Layer 2 produced — FunctionNodes (including modifiers),
+    UnresolvedNodes, and ExternalNodes — across the whole tree, not only what
+    the renderer currently displays. Used to order the index by audit weight
+    (§8.3): the contract and entry point with the largest call tree lead. Only
+    FunctionNode carries ``children``; the terminal node types end the
+    recursion. The tree is finite (cycles terminate per §11.10).
+    """
+    total = 1
+    for child in getattr(node, "children", ()):  # only FunctionNode has children
+        total += _flow_node_count(child)
+    return total
+
+
 def build_index(
     facts: RepoFacts, flows: Iterable[Flow]
 ) -> tuple[tuple[_GroupEntry, ...], int, int, int]:
@@ -155,18 +228,21 @@ def build_index(
     Flow — the index header's "trust budget" figure per spec §8.3.
 
     Empty groups are still returned (so the template can decide whether to
-    show them). Within a group, contracts are sorted alphabetically; within
-    a contract, each mutability bucket is sorted by full_name independently
-    (spec §8.3).
+    show them). Ordering (v0.18.0, spec §8.3): within a group, contracts are
+    sorted by total Flow node count descending (the heaviest call surface
+    first), and within a contract each mutability bucket is sorted by the
+    entry point's own Flow node count descending. Ties fall back to the
+    contract name / the full signature respectively, so the order stays
+    deterministic.
     """
     contract_paths = _contract_source_paths(facts)
 
-    # group_label -> contract_name -> list[(flow, full_name)]
+    # group_label -> contract_name -> list[(flow, full_name, node_count)]
     # The _EntryPointEntry itself is built later, at partition time, because
     # ``signature_html`` depends on the bucket the entry lands in (mutating
     # entries render with ``external``; read-only entries render with
     # ``external view`` — see §8.3 and the v0.7.0 spec patch).
-    by_group: dict[str, dict[str, list[tuple[Flow, str]]]] = {
+    by_group: dict[str, dict[str, list[tuple[Flow, str, int]]]] = {
         label: {} for label in GROUP_ORDER
     }
 
@@ -181,19 +257,23 @@ def build_index(
         label = categorize_path(path)
         bucket = by_group[label].setdefault(cn, [])
         full_name = flow.entry_point_function_name + _signature_suffix(flow)
-        bucket.append((flow, full_name))
+        bucket.append((flow, full_name, _flow_node_count(flow.root)))
         total += 1
         total_unresolved += flow.unresolved_count
 
     groups: list[_GroupEntry] = []
     contract_count = 0
     for label in GROUP_ORDER:
-        contracts: list[_ContractEntry] = []
-        for cn in sorted(by_group[label]):
-            pairs = sorted(by_group[label][cn], key=lambda fn: fn[1])
+        # (total_node_count, contract_name, entry) so contracts can be ordered
+        # by call-tree weight after each is built.
+        built: list[tuple[int, str, _ContractEntry]] = []
+        for cn, flows_here in by_group[label].items():
+            contract_total = sum(node_count for _, _, node_count in flows_here)
+            # Entry points heaviest-first; full_name is the deterministic tiebreak.
+            pairs = sorted(flows_here, key=lambda t: (-t[2], t[1]))
             mutating: list[_EntryPointEntry] = []
             read_only: list[_EntryPointEntry] = []
-            for flow, full_name in pairs:
+            for flow, full_name, node_count in pairs:
                 is_read_only = flow.root.view or flow.root.pure
                 mutability = "external view" if is_read_only else "external"
                 sig_html = highlight_signature(
@@ -209,24 +289,34 @@ def build_index(
                     unresolved_count=flow.unresolved_count,
                     max_depth=flow.max_depth,
                     modifier_names=_root_modifier_names(flow),
+                    node_count=node_count,
                 )
                 if is_read_only:
                     read_only.append(ep)
                 else:
                     mutating.append(ep)
             path = contract_paths.get(cn, "")
-            contracts.append(
-                _ContractEntry(
-                    name=cn,
-                    source_path=path,
-                    mutating_entry_points=tuple(mutating),
-                    read_only_entry_points=tuple(read_only),
-                    mutating_count=len(mutating),
-                    read_only_count=len(read_only),
+            built.append(
+                (
+                    contract_total,
+                    cn,
+                    _ContractEntry(
+                        name=cn,
+                        source_path=path,
+                        mutating_entry_points=tuple(mutating),
+                        read_only_entry_points=tuple(read_only),
+                        mutating_count=len(mutating),
+                        read_only_count=len(read_only),
+                        node_count=contract_total,
+                    ),
                 )
             )
             contract_count += 1
-        groups.append(_GroupEntry(label=label, contracts=tuple(contracts)))
+        # Contracts heaviest-first; the name is the deterministic tiebreak.
+        built.sort(key=lambda t: (-t[0], t[1]))
+        groups.append(
+            _GroupEntry(label=label, contracts=tuple(entry for _, _, entry in built))
+        )
 
     return tuple(groups), total, contract_count, total_unresolved
 
@@ -411,6 +501,7 @@ def create_app(
     *,
     expand_all: bool = False,
     scope: Scope | None = None,
+    config_path: Path | None = None,
 ) -> Flask:
     """Build the Flask application.
 
@@ -431,6 +522,13 @@ def create_app(
     omit it; the index then falls back to ``DEFAULT_SCOPE`` so the line
     still reflects something real rather than rendering empty. The CLI
     always passes the resolved Scope explicitly.
+
+    ``config_path`` is the TOML file the index Bindings panel's Save control
+    writes the ``[bindings]`` table to (spec §8.3, §13.2, v0.18.0) — the
+    ``--config`` path when one was given, else ``solflow.toml`` in the working
+    directory. It is the one place solflow writes to the working directory.
+    Optional; when omitted (tests, or a direct ``create_app`` call) the Save
+    route falls back to ``solflow.toml`` in the process CWD.
     """
     if scope is None:
         scope = DEFAULT_SCOPE
@@ -450,10 +548,12 @@ def create_app(
 
     # v0.17.0 (§13.2): candidate contracts per interface for the Flow-page bind
     # dropdown. Depends only on the (immutable) facts, so compute once.
+    # ``_iface_sites`` (interface → high-level call-site count) is retained for
+    # the v0.18.0 index Bindings panel, which shows the count per row (§8.3).
     _impl_sigs = _implemented_signatures(facts)
+    _iface_sites = _interface_call_sites(facts)
     candidates_by_iface: dict[str, tuple[str, ...]] = {
-        iface: _candidate_contracts(facts, iface, _impl_sigs)
-        for iface in _interface_call_sites(facts)
+        iface: _candidate_contracts(facts, iface, _impl_sigs) for iface in _iface_sites
     }
 
     # v0.17.0 (§13.2): the binding map is the one Scope field editable at
@@ -547,6 +647,16 @@ def create_app(
         # v0.15.0: ids of entry points opened recently (the Flow route records
         # them). Used to tint already-viewed rows. A frozenset for O(1) lookup.
         viewed_ids = frozenset(_parse_viewed(request.cookies.get(VIEWED_COOKIE)))
+        # v0.18.0 (§8.3, §13.2): the Bindings panel rows. Candidates and call-
+        # site counts are fixed; the current binding set is read live so the
+        # panel reflects any /bind/ change made since startup. ``saved`` carries
+        # the one-shot result of a just-completed Save (ok | error) for a
+        # transient note; absent on a normal load.
+        bindable = _build_binding_entries(
+            candidates_by_iface,
+            _iface_sites,
+            dict(current_scope.interface_bindings),
+        )
         return render_template(
             "index.html",
             groups=groups,
@@ -557,6 +667,8 @@ def create_app(
             bookmarked_entries=bookmarked_entries,
             bookmarked_contracts=bookmarked_contracts,
             viewed_ids=viewed_ids,
+            bindable=bindable,
+            saved=request.args.get("saved"),
         )
 
     @app.route("/theme/<value>")
@@ -620,6 +732,24 @@ def create_app(
             pairs.append((iface, contract))
         _rebuild(replace(current_scope, interface_bindings=tuple(pairs)))
         return redirect(_safe_next(request.args.get("next")))
+
+    @app.route("/bindings/save", methods=["POST"])
+    def save_bindings() -> Response:
+        # v0.18.0 (spec §8.3, §13.2). The index Bindings panel's Save control
+        # persists the CURRENT global binding set to the [bindings] table of the
+        # config file so it survives a restart — the one place solflow writes to
+        # the working directory. The write is surgical (only [bindings] changes)
+        # and validated before it touches disk; a ConfigError/OSError becomes a
+        # loud ``?saved=error`` note rather than a 500. POST (not a GET link) so a
+        # browser prefetch can't trigger a file write. Always returns to the
+        # index panel.
+        target = config_path if config_path is not None else Path.cwd() / "solflow.toml"
+        try:
+            save_interface_bindings_to_toml(target, current_scope.interface_bindings)
+        except (ConfigError, OSError) as exc:
+            app.logger.warning("could not save bindings to %s: %s", target, exc)
+            return redirect("/?saved=error#bindings")
+        return redirect("/?saved=ok#bindings")
 
     @app.route("/flow/<path:url_id>")
     def flow_page(url_id: str) -> Response:

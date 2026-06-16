@@ -169,6 +169,60 @@
     }
   }
 
+  // ----- v0.18.0 index Bindings panel (spec §8.3, §13.2) -----------------
+  //
+  // Each interface row is a real GET form to /bind/ with a "Set" submit, so it
+  // works with no JavaScript. This enhances it: auto-apply on `change` (and hide
+  // the now-redundant "Set" buttons), and collapse a long list to the first few
+  // rows behind a "Show all" toggle. With JavaScript disabled the full list and
+  // every "Set" button render server-side, so no binding is unreachable.
+  var BINDINGS_VISIBLE = 3;
+
+  function initBindings() {
+    var list = document.getElementById("bindings-list");
+    if (!list) return;
+
+    list.querySelectorAll(".bindings-form").forEach(function (form) {
+      var select = form.querySelector(".bindings-select");
+      var setBtn = form.querySelector(".bindings-set");
+      if (setBtn) setBtn.style.display = "none";
+      if (select) {
+        select.addEventListener("change", function () {
+          form.submit();
+        });
+      }
+    });
+
+    var rows = Array.prototype.slice.call(
+      list.querySelectorAll("[data-bind-row]")
+    );
+    if (rows.length <= BINDINGS_VISIBLE) return;
+
+    var hidden = rows.slice(BINDINGS_VISIBLE);
+    var expanded = false;
+    var toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "bindings-showall";
+
+    function render() {
+      hidden.forEach(function (row) {
+        row.style.display = expanded ? "" : "none";
+      });
+      toggle.textContent = expanded
+        ? "Show fewer"
+        : "Show all (" + rows.length + ")";
+      toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    }
+
+    toggle.addEventListener("click", function () {
+      expanded = !expanded;
+      render();
+    });
+    list.parentNode.insertBefore(toggle, list.nextSibling);
+    render();
+  }
+
   // The script is defer-loaded, so the DOM is parsed by the time this runs.
   initFilter();
+  initBindings();
 })();

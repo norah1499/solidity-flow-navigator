@@ -35,7 +35,9 @@ from solidity_flow_navigator.flow.types import Flow
 from solidity_flow_navigator.serve.app import (
     BOOKMARK_COOKIE,
     THEME_COOKIE,
+    _build_binding_entries,
     _candidate_contracts,
+    _flow_node_count,
     _implemented_signatures,
     _parse_bookmarks,
     _safe_json,
@@ -2175,3 +2177,167 @@ def test_candidate_contracts_empty_when_nothing_implements() -> None:
     facts = RepoFacts(repo_path="/abs", contracts=(iface, other), free_functions=())
     cands = _candidate_contracts(facts, "Vm", _implemented_signatures(facts))
     assert cands == ()
+
+
+# ---------------------------------------------------------------------------
+# Index Bindings panel + Save-to-TOML (v0.18.0, spec §8.3, §13.2)
+# ---------------------------------------------------------------------------
+
+
+def test_build_binding_entries_filters_and_sorts() -> None:
+    """The panel lists bindable interfaces (≥1 candidate OR already bound),
+    drops candidate-less unbound ones, and sorts by call-site count descending
+    then name (highest-impact first, regardless of bound state)."""
+    candidates = {"IA": ("X", "Y"), "IB": (), "IC": ("Z",), "ID": ()}
+    sites = {"IA": 5, "IB": 2, "IC": 9, "ID": 1}
+    bound = {"IB": "BImpl"}  # IB has no candidates but is bound → kept + clearable
+    entries = _build_binding_entries(candidates, sites, bound)
+    # ID (no candidates, not bound) is omitted; the rest sort by call-site count
+    # descending: IC(9), IA(5), IB(2) — bound IB is NOT pulled to the front.
+    assert [e.interface for e in entries] == ["IC", "IA", "IB"]
+    assert entries[1].interface == "IA"
+    assert entries[1].call_sites == 5
+    ib = entries[2]
+    assert ib.bound_to == "BImpl"
+    assert ib.candidates == ()  # bound to an out-of-candidate contract, still shown
+
+
+def test_bindings_panel_renders_with_seeded_binding(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """A seeded binding makes the panel render its row with the bound contract
+    selected (even when the interface has no detected candidate, so the bound
+    value stays visible and clearable), the Save control, and the no-JS Set
+    button."""
+    app = create_app(
+        solmate_facts,
+        solmate_flows,
+        scope=Scope(interface_bindings=(("IFoo", "Bar"),)),
+    )
+    app.config.update(TESTING=True)
+    html = app.test_client().get("/").get_data(as_text=True)
+    assert 'id="bindings"' in html
+    assert "Save bindings" in html
+    assert "IFoo" in html
+    assert 'value="Bar" selected' in html  # out-of-candidate bound value kept
+    assert "bindings-set" in html  # the no-JS fallback submit
+
+
+def test_save_bindings_route_writes_and_redirects(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...], tmp_path
+) -> None:
+    target = tmp_path / "solflow.toml"
+    app = create_app(
+        solmate_facts,
+        solmate_flows,
+        scope=Scope(interface_bindings=(("IFoo", "Bar"),)),
+        config_path=target,
+    )
+    app.config.update(TESTING=True)
+    resp = app.test_client().post("/bindings/save")
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/?saved=ok#bindings"
+    text = target.read_text()
+    assert "[bindings]" in text
+    assert 'IFoo = "Bar"' in text
+
+
+def test_save_bindings_route_is_surgical(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...], tmp_path
+) -> None:
+    target = tmp_path / "solflow.toml"
+    target.write_text("# hand-written\n[scope]\nexclude_paths = " '["**/*.t.sol"]\n')
+    app = create_app(
+        solmate_facts,
+        solmate_flows,
+        scope=Scope(interface_bindings=(("IFoo", "Bar"),)),
+        config_path=target,
+    )
+    app.config.update(TESTING=True)
+    app.test_client().post("/bindings/save")
+    text = target.read_text()
+    assert "# hand-written" in text  # comment preserved
+    assert "[scope]" in text  # other table preserved
+    assert 'IFoo = "Bar"' in text  # bindings written
+
+
+def test_save_bindings_route_error_is_loud(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...], tmp_path
+) -> None:
+    # An unwritable target (parent directory does not exist) is reported as a
+    # ?saved=error note, not a 500, and no file is created.
+    target = tmp_path / "nope" / "solflow.toml"
+    app = create_app(
+        solmate_facts,
+        solmate_flows,
+        scope=Scope(interface_bindings=(("IFoo", "Bar"),)),
+        config_path=target,
+    )
+    app.config.update(TESTING=True)
+    resp = app.test_client().post("/bindings/save")
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/?saved=error#bindings"
+    assert not target.exists()
+
+
+def test_bind_from_index_redirects_to_panel_fragment(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """The index panel's per-row form points /bind/ back at /#bindings; the
+    fragment survives _safe_next so the page returns to the panel."""
+    app = create_app(solmate_facts, solmate_flows, scope=Scope())
+    app.config.update(TESTING=True)
+    resp = app.test_client().get("/bind/IFoo?contract=Bar&next=/%23bindings")
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == "/#bindings"
+
+
+# ---------------------------------------------------------------------------
+# Index listing order by Flow node count (v0.18.0, spec §8.3)
+# ---------------------------------------------------------------------------
+
+
+class _FakeNode:
+    """Minimal stand-in for ``_flow_node_count`` (it only reads ``.children``)."""
+
+    def __init__(self, *children: _FakeNode) -> None:
+        self.children = children
+
+
+def test_flow_node_count_counts_root_plus_all_subnodes() -> None:
+    assert _flow_node_count(_FakeNode()) == 1  # lone root
+    # root + two children, the second with its own child → 4 nodes total.
+    assert _flow_node_count(_FakeNode(_FakeNode(), _FakeNode(_FakeNode()))) == 4
+    # A terminal node type (no ``children`` attribute at all) counts as 1.
+    assert _flow_node_count(object()) == 1  # type: ignore[arg-type]
+
+
+def test_index_orders_contracts_and_entries_by_node_count(
+    solmate_facts: RepoFacts, solmate_flows: tuple[Flow, ...]
+) -> None:
+    """Contracts within a group are ordered by total Flow node count descending;
+    within a contract each mutability bucket is likewise ordered descending; and
+    a contract's ``node_count`` equals the sum across its entry points."""
+    groups, _, _, _ = build_index(solmate_facts, solmate_flows)
+    for group in groups:
+        contract_counts = [c.node_count for c in group.contracts]
+        assert contract_counts == sorted(
+            contract_counts, reverse=True
+        ), f"contracts in {group.label} must be heaviest-first by node count"
+        for contract in group.contracts:
+            summed = sum(
+                ep.node_count
+                for ep in (
+                    *contract.mutating_entry_points,
+                    *contract.read_only_entry_points,
+                )
+            )
+            assert contract.node_count == summed
+            for bucket in (
+                contract.mutating_entry_points,
+                contract.read_only_entry_points,
+            ):
+                counts = [ep.node_count for ep in bucket]
+                assert counts == sorted(
+                    counts, reverse=True
+                ), f"{contract.name} entries must be heaviest-first by node count"

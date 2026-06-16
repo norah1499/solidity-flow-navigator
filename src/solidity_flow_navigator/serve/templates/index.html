@@ -80,6 +80,56 @@
   <span class="scope-chrome">max call depth</span>
 </p>
 
+{# v0.18.0 (spec §8.3, §13.2): Bindings panel. One row per bindable interface;
+   each row is a real GET form to /bind/<iface> with a "Set" submit, so picking a
+   concrete contract resolves that interface at every call site across every Flow
+   — and works with no JavaScript. "Save to solflow.toml" (POST /bindings/save)
+   persists the current bindings so they survive a restart (the one place solflow
+   writes to the working directory). index.js collapses a long list behind a
+   "Show all" toggle and auto-applies on change (hiding the per-row "Set"); with
+   JS off the full list and all controls render server-side. Renders only when at
+   least one interface is bindable. #}
+{% if bindable %}
+<section class="index-bindings" id="bindings" aria-label="Interface bindings">
+  <div class="index-bindings-head">
+    <h2 class="group-heading">Bindings</h2>
+    <form class="bindings-save" method="post" action="{{ url_for('save_bindings') }}">
+      <button class="bindings-save-btn" type="submit" title="Write the current bindings to solflow.toml so they persist the next time you run solflow here">Save bindings</button>
+    </form>
+  </div>
+  {% if saved == 'ok' %}
+  <p class="bindings-result is-ok" role="status">Saved to solflow.toml.</p>
+  {% elif saved == 'error' %}
+  <p class="bindings-result is-error" role="status">Could not write solflow.toml — see the server log.</p>
+  {% endif %}
+  <p class="bindings-hint">Resolve an interface to a concrete contract across all Flows &middot; Save to persist across sessions.</p>
+  <ul class="bindings-list" id="bindings-list">
+    {% for b in bindable %}
+    <li class="bindings-row{{ ' is-bound' if b.bound_to }}" data-bind-row>
+      <span class="bindings-iface"><code class="src">{{ b.interface }}</code></span>
+      <form class="bindings-form" method="get" action="{{ url_for('set_binding', iface=b.interface) }}">
+        <input type="hidden" name="next" value="/#bindings">
+        <span class="bindings-arrow" aria-hidden="true">&rarr;</span>
+        <select class="node-bind-select bindings-select" name="contract" aria-label="Concrete contract for {{ b.interface }}">
+          <option value="__none__"{% if not b.bound_to %} selected{% endif %}>&mdash; unbound &mdash;</option>
+          {% for c in b.candidates %}
+          <option value="{{ c }}"{% if b.bound_to == c %} selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+          {%- if b.bound_to and b.bound_to not in b.candidates %}
+          {# A binding to a contract not among detected candidates (set via --bind,
+             or now out of scope). Keep it selectable so it shows and can be cleared. #}
+          <option value="{{ b.bound_to }}" selected>{{ b.bound_to }}</option>
+          {%- endif %}
+        </select>
+        <button class="bindings-set" type="submit">Set</button>
+      </form>
+      <span class="bindings-meta">{{ b.call_sites }} call site{{ 's' if b.call_sites != 1 }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
 {# v0.15.0 (spec §8.3): the Bookmarked section renders only when the cookie holds
    ids matching this analysis. Contracts link to their block anchor; entries link
    to their Flow page. Each carries the same toggle (already "on") to un-bookmark.
