@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solflow"
-version = "0.17.2"
+version = "0.18.0"
 description = "Per-entry-point navigable call-graph visualizations of Solidity repositories, for Web3 security auditors."
 readme = "README.md"
 requires-python = ">=3.11"
