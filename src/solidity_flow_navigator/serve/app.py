@@ -135,6 +135,12 @@ class _ContractEntry:
     # v0.18.0 (§8.3): sum of node_count across this contract's entry points;
     # the index sorts contracts by it (heaviest call surface first).
     node_count: int
+    # v0.20.0 redesign (§8.3): sum of ``unresolved_count`` across this
+    # contract's entry points — the per-contract "N unresolved" the sidebar
+    # navigator shows as a neutral fact (never a risk cue). Request-independent,
+    # so it is precomputed here; the per-contract reviewed count is request-
+    # dependent (it intersects the viewed cookie) and is computed in the route.
+    unresolved_total: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,6 +302,9 @@ def build_index(
                 else:
                     mutating.append(ep)
             path = contract_paths.get(cn, "")
+            unresolved_total = sum(
+                ep.unresolved_count for ep in (*mutating, *read_only)
+            )
             built.append(
                 (
                     contract_total,
@@ -308,6 +317,7 @@ def build_index(
                         mutating_count=len(mutating),
                         read_only_count=len(read_only),
                         node_count=contract_total,
+                        unresolved_total=unresolved_total,
                     ),
                 )
             )
@@ -647,6 +657,43 @@ def create_app(
         # v0.15.0: ids of entry points opened recently (the Flow route records
         # them). Used to tint already-viewed rows. A frozenset for O(1) lookup.
         viewed_ids = frozenset(_parse_viewed(request.cookies.get(VIEWED_COOKIE)))
+        # v0.20.0 redesign (§8.3). The sidebar Overview, the navigator's
+        # per-contract "M/N reviewed", and the control-bar facet pills need a
+        # few aggregates over the current listing. The reviewed counts are
+        # request-dependent (they intersect the viewed cookie), so they are
+        # computed here rather than in the request-independent build_index; the
+        # facet counts are derived in the same single walk. ``Unguarded`` is a
+        # mutating entry with no modifiers, ``Guarded`` one with at least one
+        # (§8.3); both are mutating-only — Reads are neither.
+        reviewed_by_contract: dict[str, int] = {}
+        total_reviewed = 0
+        facet_writes = facet_reads = facet_unguarded = facet_guarded = 0
+        for _group in groups:
+            for _contract in _group.contracts:
+                reviewed = sum(
+                    1
+                    for ep in (
+                        *_contract.mutating_entry_points,
+                        *_contract.read_only_entry_points,
+                    )
+                    if ep.url_id in viewed_ids
+                )
+                reviewed_by_contract[_contract.name] = reviewed
+                total_reviewed += reviewed
+                for ep in _contract.mutating_entry_points:
+                    facet_writes += 1
+                    if ep.modifier_names:
+                        facet_guarded += 1
+                    else:
+                        facet_unguarded += 1
+                facet_reads += _contract.read_only_count
+        facets = {
+            "all": total_eps,
+            "writes": facet_writes,
+            "reads": facet_reads,
+            "unguarded": facet_unguarded,
+            "guarded": facet_guarded,
+        }
         # v0.18.0 (§8.3, §13.2): the Bindings panel rows. Candidates and call-
         # site counts are fixed; the current binding set is read live so the
         # panel reflects any /bind/ change made since startup. ``saved`` carries
@@ -663,6 +710,9 @@ def create_app(
             total_entry_points=total_eps,
             total_contracts=total_contracts,
             total_unresolved=total_unresolved,
+            total_reviewed=total_reviewed,
+            reviewed_by_contract=reviewed_by_contract,
+            facets=facets,
             scope=current_scope,
             bookmarked_entries=bookmarked_entries,
             bookmarked_contracts=bookmarked_contracts,

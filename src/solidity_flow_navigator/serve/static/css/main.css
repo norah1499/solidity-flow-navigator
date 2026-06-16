@@ -26,6 +26,21 @@
   --border-strong: #2c2c2c;
   --border-soft: #d0cdc1;
 
+  /* v0.20.0 index redesign (§8.3) tokens. --fg-faint: tertiary text (paths,
+     meta, "N sites"). --row-sel: selected/hover row tint. --mod-soft: the shared
+     accent for chevrons, links, the Save button, and the ⇄ glyph — it aliases the
+     already-themed ink-blue (--node-mod-border) so a single definition tracks
+     both palettes at use time. --idx-mod-*: the softer index modifier chip,
+     lighter than the solid flow-page badge so a column of them stays calm.
+     The "N unr" index chip is unchanged — it already reuses the
+     --node-unresolved-* family plus the dark override below. */
+  --fg-faint: #8a887f;
+  --row-sel: rgba(58, 109, 176, 0.09);
+  --mod-soft: var(--node-mod-border);
+  --idx-mod-bg: #e8f0fa;
+  --idx-mod-text: #2f5d96;
+  --idx-mod-border: #bcd3ee;
+
   /* FunctionNode (regular) */
   --node-fn-bg: #fdfcf7;
   --node-fn-border: #2c2c2c;
@@ -131,6 +146,13 @@
     --border-strong: #c2c0b6;
     --border-soft: #3a3a36;
 
+    /* v0.20.0 index redesign tokens — dark mirror (see :root for rationale). */
+    --fg-faint: #74736b;
+    --row-sel: rgba(127, 179, 235, 0.12);
+    --idx-mod-bg: #1a2433;
+    --idx-mod-text: #9fc0ec;
+    --idx-mod-border: #33455e;
+
     --node-fn-bg: #121211;     /* near-black code-editor surface */
     --node-fn-border: #c2c0b6;
 
@@ -184,6 +206,17 @@
   --fg-muted: #9f9d92;
   --border-strong: #c2c0b6;
   --border-soft: #3a3a36;
+
+  /* v0.20.0 index redesign tokens — dark mirror (see :root). These MUST be
+     repeated here, not only in the prefers-color-scheme block above: a forced
+     Dark theme (the toggle) cannot reach the media-gated rule, and without them
+     the modifier chip / faint text / row tint fall back to their light values
+     (a bright #e8f0fa chip glaring on the dark canvas). */
+  --fg-faint: #74736b;
+  --row-sel: rgba(127, 179, 235, 0.12);
+  --idx-mod-bg: #1a2433;
+  --idx-mod-text: #9fc0ec;
+  --idx-mod-border: #33455e;
 
   --node-fn-bg: #121211;
   --node-fn-border: #c2c0b6;
@@ -327,74 +360,420 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   padding: 2rem;
 }
 
-/* ----- index page --------------------------------------------------------- */
+/* ----- index page: two-pane attack-surface map (v0.20.0 redesign, §8.3) --- */
 
-/* v0.8.0 index header: page-level title with repo_path subtitle and three
-   right-aligned count widgets. Replaces the v0.7.0 `.index-summary` line. */
-.index-header {
-  margin: 0 0 0.75rem;
+/* The index is the only page with a two-column body: a sticky left sidebar
+   (run summary, foldable Bindings card, contract navigator) beside a main
+   column whose search / filter / sort controls sit at the very top, above a
+   per-contract listing of entry points. The flow page keeps the single
+   centered .site-main, so every layout override here is scoped to
+   body.index-page. Container: 1320px max, flex row, items top-aligned. */
+body.index-page .site-main {
+  max-width: 1320px;
+  padding: 1.75rem 2rem;
 }
-
-/* v0.16.0 index filter (spec §8.3): a text box that narrows the listing below.
-   The box is server-rendered but carries the `hidden` attribute; index.js
-   removes it on load. `display` is scoped to :not([hidden]) so the UA
-   `[hidden] { display: none }` rule still wins for no-JS users — an author
-   `display: flex` on the bare selector would override it and leak the box. */
-.index-filter {
-  align-items: center;
-  gap: 0.5rem;
-}
-.index-filter:not([hidden]) {
+.index-layout {
   display: flex;
+  align-items: flex-start;
+  gap: 2rem;
 }
 
-/* The first contract group's heading shares its row with the filter, so the
-   control sits with the listing it narrows rather than floating in a band of its
-   own. The row is sticky (opaque page-colored bar + hairline) so the filter stays
-   in reach while the listing scrolls. */
-.index-group .group-head-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem 1.5rem;
-  flex-wrap: wrap;
-  margin: 0 0 1.25rem;
-  padding: 0.5rem 0;
-  border-bottom: 0.5px solid var(--border-soft);
+/* --- left sidebar -------------------------------------------------------- */
+/* Sticky at top:0; as tall as its content but capped to the viewport, scrolling
+   internally past that. Its first block (Overview) is min-height:80px so its
+   bottom hairline lines up with the main column's equal-height sticky control
+   bar — the two borders stay aligned as the page scrolls. */
+.index-sidebar {
+  flex: 0 0 308px;
   position: sticky;
   top: 0;
-  z-index: 10;
-  background: var(--bg-page);
+  max-height: 100vh;
+  overflow: auto;
+  padding-bottom: 1rem;
+  /* A right gutter so the scrollbar sits a touch further right, clear of the
+     cards, instead of riding their edge. */
+  padding-right: 0.5rem;
+  /* A thin, quiet scrollbar — the default chunky track read too strikingly
+     against the calm sidebar (Firefox + WebKit/Blink). */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-soft) transparent;
 }
-.index-group .group-head-row .group-heading {
+.index-sidebar::-webkit-scrollbar { width: 6px; }
+.index-sidebar::-webkit-scrollbar-track { background: transparent; }
+.index-sidebar::-webkit-scrollbar-thumb {
+  background: var(--border-soft);
+  border-radius: 3px;
+}
+.index-sidebar:hover::-webkit-scrollbar-thumb { background: var(--fg-faint); }
+.index-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Section labels shared by Overview and the navigator (OVERVIEW / CONTRACTS). */
+.index-overview-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-faint);
+  margin: 0 0 0.5rem;
+}
+
+/* Overview block — the run summary (contracts / entry points / reviewed). */
+.index-overview {
+  min-height: 80px;
+  border-bottom: 0.5px solid var(--border-soft);
+  margin-bottom: 1rem;
+}
+.index-overview-line {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin: 0 0 0.2rem;
+}
+.index-overview-line b {
+  color: var(--fg-text);
+  font-weight: 600;
+}
+.index-overview-line .ov-sep {
+  color: var(--fg-faint);
+}
+
+/* Bindings card — foldable. The fold state lives in localStorage (index.js);
+   the body renders open server-side so the no-JS path shows everything. The
+   bind/save mechanics stay the existing GET form → /bind/<iface> + POST →
+   /bindings/save, so picking a contract works with no JavaScript. */
+.index-bindings {
+  border: 0.5px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  padding: 0.75rem 0.8rem;
+  margin: 0 0 1.25rem;
+}
+.index-bindings-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+}
+.fold-chevron {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  line-height: 0;
+}
+.fold-chevron svg { display: block; }
+.index-bindings:not([data-open]) .fold-chevron { transform: rotate(-90deg); }
+.bindings-glyph {
+  color: var(--mod-soft);
+  font-size: 14px;
+  line-height: 1;
+}
+.bindings-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-text);
   margin: 0;
-  padding-bottom: 0;
-  border-bottom: 0;
 }
-.index-filter-input {
+.bindings-collapsed-summary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin-left: auto;
+}
+.index-bindings[data-open] .bindings-collapsed-summary { display: none; }
+.index-bindings:not([data-open]) .index-bindings-body { display: none; }
+.index-bindings-body { margin-top: 0.75rem; }
+.bindings-hint {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin: 0 0 0.75rem;
+  line-height: 1.6;
+}
+.bindings-hint b { color: var(--fg-text); font-weight: 600; }
+.bindings-list { list-style: none; margin: 0; padding: 0; }
+.bindings-row {
+  padding: 0.45rem 0;
+  border-top: 0.5px solid var(--border-soft);
+}
+.bindings-row:first-child { border-top: 0; }
+.bindings-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+}
+.bindings-iface {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.bindings-iface .src { color: var(--tok-keyword); }
+.bindings-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.bindings-form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+}
+/* Custom select chrome so the dropdown reads the same in every browser — a soft
+   rounded filled pill with a quiet double-chevron, rather than a stark white
+   single-caret box in one engine and a gray macOS pill in another. appearance:
+   none drops the native control; the chevron is an inline SVG background (muted
+   in light; a lighter override for dark is below). */
+.bindings-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-text);
+  background-color: var(--node-title-bg);
+  border: 0.5px solid var(--border-soft);
+  border-radius: 6px;
+  padding: 0.35rem 1.7rem 0.35rem 0.6rem;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none' stroke='%238a887f' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 5.5l3-2.5 3 2.5'/%3E%3Cpath d='M4 8.5l3 2.5 3-2.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 13px;
+}
+.bindings-select:focus {
+  outline: none;
+  border-color: var(--border-strong);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .bindings-select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none' stroke='%239f9d92' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 5.5l3-2.5 3 2.5'/%3E%3Cpath d='M4 8.5l3 2.5 3-2.5'/%3E%3C/svg%3E");
+  }
+}
+:root[data-theme="dark"] .bindings-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none' stroke='%239f9d92' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 5.5l3-2.5 3 2.5'/%3E%3Cpath d='M4 8.5l3 2.5 3-2.5'/%3E%3C/svg%3E");
+}
+.bindings-set {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.bindings-showall {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--mod-soft);
+  background: none;
+  border: 0;
+  padding: 0.5rem 0 0;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.bindings-showall:hover { text-decoration: underline; }
+.bindings-save { margin: 0.75rem 0 0; }
+.bindings-save-btn {
+  display: block;
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--bg-surface);
+  background: var(--mod-soft);
+  border: 0;
+  border-radius: 4px;
+  padding: 0.45rem 0.7rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.bindings-save-btn:hover { filter: brightness(1.06); }
+.bindings-result {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  margin: 0.5rem 0 0;
+}
+.bindings-result.is-ok { color: var(--tok-string); }
+.bindings-result.is-error { color: var(--node-unresolved-border); }
+/* Compact scope line — closes the Bindings card body (or stands alone in the
+   sidebar when no interface is bindable). Excluded/stub counts as a neutral
+   verification fact, not a control surface. */
+.bindings-scope,
+.index-scope {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-faint);
+  margin: 0.75rem 0 0;
+  line-height: 1.6;
+}
+
+/* Contracts navigator — one row per contract, grouped by the Project / Tests /
+   Dependencies dividers. railJump (index.js) smooth-scrolls to #c-<slug>; the
+   active row (scroll-spy) fills with --node-title-bg, an out-of-filter row dims. */
+.index-nav-group {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+  margin: 0.85rem 0 0.25rem;
+}
+.nav-row {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  padding: 0.3rem 0.4rem;
+  border-radius: 5px;
+}
+.nav-row.is-active { background: var(--node-title-bg); }
+.nav-row.is-dim { opacity: 0.38; }
+.nav-row-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.nav-name {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.nav-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.nav-path {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* `unresolved` is shown ONLY as a neutral fact, never as a risk/priority cue
+   (auditors objected to treating "unresolved" as signal) — hence --fg-faint,
+   the same tertiary chrome as the path, never the red of the per-entry chip. */
+.nav-stat {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- main column: control bar ------------------------------------------- */
+/* Sticky at top:0, equal min-height to the sidebar's Overview block so their
+   bottom hairlines align. Two rows: facet pills, then filter + sort. */
+.index-controls {
+  position: sticky;
+  top: 0;
+  z-index: 12;
+  background: var(--bg-page);
+  border-bottom: 0.5px solid var(--border-soft);
+  padding: 0.4rem 0 0.65rem;
+  margin-bottom: 1rem;
+  min-height: 80px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.55rem;
+}
+/* Facet pills — client-side filters of the listing (JS-only). Hidden until
+   index.js reveals them, so no-JS users never see a dead control. */
+.facet-row {
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+.facet-row:not([hidden]) { display: flex; }
+.facet {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 0.5px solid transparent;
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.facet b { color: var(--fg-text); font-weight: 600; }
+.facet:hover { color: var(--fg-text); }
+.facet.is-active {
+  background: var(--node-title-bg);
+  border-color: var(--border-soft);
+}
+.facet-sep { color: var(--fg-faint); font-family: var(--font-mono); }
+.filter-sort-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+/* The text filter narrows the listing as the auditor types (server-rendered but
+   hidden; index.js reveals + wires it). Display is scoped to :not([hidden]) so
+   the UA `[hidden] { display: none }` rule still wins for no-JS users. */
+/* The filter input, its clear button, and the sort pill all share one height
+   (--control-h) and box-sizing so they line up exactly; vertical centering comes
+   from the height, not per-control padding. The search box is ~10% smaller than
+   the earlier oversized version (12px, narrower basis). */
+.index-filter {
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1 1 19rem;
+}
+.index-filter:not([hidden]) { display: flex; }
+/* One shared height for the input, its clear button, and the sort pill so they
+   line up exactly — bumping it resizes all three together. */
+.index-filter-input,
+.index-filter-clear,
+.sort-segs {
+  box-sizing: border-box;
+  height: 1.95rem;
+}
+.index-filter-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg-text);
   background: var(--bg-surface);
   border: 0.5px solid var(--border-soft);
-  border-radius: 2px;
-  padding: 0.35rem 0.6rem;
-  width: 22rem;
-  max-width: 100%;
+  border-radius: 3px;
+  padding: 0 0.6rem;
 }
 .index-filter-input:focus {
   outline: none;
   border-color: var(--border-strong);
 }
 .index-filter-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: inherit;
   font-size: 14px;
   line-height: 1;
   color: var(--fg-muted);
   background: var(--bg-surface);
   border: 0.5px solid var(--border-soft);
-  border-radius: 2px;
-  padding: 0.25rem 0.5rem;
+  border-radius: 3px;
+  padding: 0 0.55rem;
   cursor: pointer;
 }
 .index-filter-clear:hover {
@@ -405,323 +784,269 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg-muted);
-}
-
-.index-header-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 2rem;
-  flex-wrap: wrap;
-}
-
-.index-title {
-  font-size: 18px;
-  font-weight: 500;
-  margin: 0;
-}
-
-.index-counts {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  gap: 1.5rem;
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-
-/* Spec §8.3: count values in default text color, labels in --fg-muted. */
-.count-item .count-value {
-  color: var(--fg-text);
-}
-
-.count-item .count-label {
-  color: var(--fg-muted);
-}
-
-/* the untraced count is the auditor's "trust budget" — tint it red (the same
-   family as the N unr pills / UnresolvedNode borders) when it is non-zero. */
-.count-item .count-value.is-untraced {
-  color: var(--node-unresolved-border);
-}
-
-/* v0.11.0: the .index-subtitle rule is gone with the duplicated repo-path
-   subtitle (spec §8.3) — the path renders once, in the site header. */
-
-/* v0.8.0 scope summary line: prefix + excluded globs + stub-paths section,
-   chrome (Scope, separators, section labels) in --fg-muted; glob values
-   and the literal "none" in default text color (spec §8.3). */
-.index-scope {
-  /* the legend moved to the foot of the page, so the scope line now ends the
-     top chrome block — give it a clean gap to the panels below. */
-  margin: 0 0 1.5rem;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--fg-muted);
-  line-height: 1.7;
-}
-
-.index-scope .scope-chrome,
-.index-legend .scope-chrome {
-  color: var(--fg-muted);
-}
-
-.index-scope .scope-glob,
-.index-scope .scope-none {
-  color: var(--fg-text);
-  background: transparent;
-  font-family: var(--font-mono);
-}
-
-/* v0.12.0 chips legend (spec §8.3): second chrome line under the scope
-   summary. Legend keys render through the SAME classes as the live chips
-   (.badge-modifier, .meta-unresolved, .meta-depth) so the legend is
-   self-verifying against the rows below; this block only handles line
-   spacing and key sizing in the legend context. */
-.index-legend {
-  margin: 1.5rem 0 0.75rem;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--fg-muted);
-  line-height: 1.7;
-}
-
-.index-legend .meta-unresolved,
-.index-legend .meta-depth {
-  font-size: 11px;
-}
-
-/* v0.18.0 Bindings panel (spec §8.3, §13.2): a dedicated index panel listing
-   bindable interfaces with a per-interface dropdown (a real GET form to /bind/)
-   and a Save-to-solflow.toml button (POST /bindings/save). index.js collapses a
-   long list behind a "Show all" toggle and auto-applies on change; with JS off
-   the full list + "Set" buttons render server-side. Native <select>/<button>
-   chrome tracks the palette via the :root color-scheme declaration. */
-.index-bindings {
-  margin: 0 0 3rem;
-}
-.index-bindings-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin-bottom: 0.75rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 0.5px solid var(--border-soft);
-}
-.index-bindings-head .group-heading {
-  margin: 0;
-  padding-bottom: 0;
-  border-bottom: 0;
-  flex: 1 1 auto;
-}
-.bindings-save {
-  margin: 0;
-}
-.bindings-save-btn {
-  font-family: var(--font-sans);
-  font-size: 13px;
-  color: var(--fg-text);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
-  padding: 0.3rem 0.7rem;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .bindings-save-btn {
-    transition: background-color 120ms ease, color 120ms ease;
-  }
-}
-.bindings-save-btn:hover {
-  background: var(--border-strong);
-  color: var(--bg-surface);
-}
-.bindings-result {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  margin: 0.4rem 0 0;
-}
-.bindings-result.is-ok {
-  color: var(--tok-string);
-}
-.bindings-result.is-error {
-  color: var(--node-unresolved-border);
-}
-.bindings-hint {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--fg-muted);
-  margin: 0 0 1rem;
-  line-height: 1.7;
-}
-.bindings-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.bindings-row {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  padding: 0.3rem 0;
-}
-/* Fixed-width interface column so every dropdown starts at the same x (the
-   arrow + select are the next flex item, so a constant column left-aligns
-   them); names wider than the column wrap rather than push the select right. */
-.bindings-iface {
-  flex: 0 0 17rem;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-.bindings-iface .src {
-  color: var(--tok-keyword);
-}
-.bindings-form {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin: 0;
-}
-.bindings-arrow {
-  font-family: var(--font-mono);
-  color: var(--fg-muted);
-}
-.bindings-row.is-bound .bindings-arrow {
-  color: var(--tok-number);
-}
-.bindings-set {
-  font-family: var(--font-sans);
-  font-size: 12px;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-.bindings-meta {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-muted);
-  margin-left: auto;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.bindings-showall {
-  font-family: var(--font-sans);
+/* Sort segmented control (Name | Depth) — client-side reorder. Hidden until
+   index.js reveals it. */
+.sort-control {
+  align-items: center;
+  gap: 0.4rem;
+}
+.sort-control:not([hidden]) { display: inline-flex; }
+.sort-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-faint);
+}
+/* The Name | Depth segments mirror the header's Auto | Light | Dark control: a
+   single bordered pill, segments divided by a hairline, the active one inverted
+   (foreground fill, surface-colored text). */
+.sort-segs {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  overflow: hidden;
+  font-size: 12px;
+}
+.sort-seg {
+  display: inline-flex;
+  align-items: center;
+  font-family: inherit;
   font-size: 12px;
   color: var(--fg-muted);
-  background: none;
+  background: transparent;
   border: 0;
-  padding: 0.5rem 0 0;
+  border-left: 1px solid var(--border-strong);
+  padding: 0 0.6rem;
   cursor: pointer;
   touch-action: manipulation;
 }
-.bindings-showall:hover {
+.sort-seg:first-child { border-left: 0; }
+.sort-seg:hover,
+.sort-seg.is-active {
+  background: var(--fg-text);
+  color: var(--bg-surface);
+}
+
+/* --- Pinned (only when bookmarks exist) --------------------------------- */
+.index-bookmarked { margin: 0 0 1.5rem; }
+.pinned-heading {
+  font-size: 14px;
+  font-weight: 600;
   color: var(--fg-text);
-}
-
-.index-group {
-  margin: 0 0 3rem;
-}
-
-.group-heading {
-  font-size: 18px;
-  font-weight: 500;
-  margin: 0 0 1.25rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 0.5px solid var(--border-soft);
-}
-
-.contract-block {
-  margin: 0 0 2rem;
-}
-
-.contract-name {
-  font-size: 15px;
-  font-weight: 500;
   margin: 0 0 0.5rem;
+}
+.bookmark-list { list-style: none; margin: 0; padding: 0; }
+.bookmark-item {
   display: flex;
   align-items: baseline;
-  gap: 0.75rem;
-  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.1rem 0;
+  padding: 3px 6px;
+  border-radius: 5px;
 }
-
-.contract-path {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-muted);
-  font-weight: 400;
-}
-
-.entry-section {
-  margin: 0 0 0.75rem;
-}
-
-.entry-section:last-child {
-  margin-bottom: 0;
-}
-
-.section-heading {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  margin: 0.8rem 0 0.3rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.entry-list {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 0 1rem;
-}
-
-.entry-list li { margin: 0.2rem 0; }
-
-/* v0.8.0 entry row: flex layout so the per-entry metadata column stays
-   right-aligned even when the signature wraps to multiple lines. The link
-   on the left can shrink and wrap; the metadata on the right does not. */
-.entry-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.entry-link {
+.bookmark-link {
   text-decoration: none;
   color: var(--fg-text);
-  /* v0.15.0: padding + offsetting negative margin give the :visited highlight
-     pill (below) breathing room without shifting row layout. */
-  padding: 1px 4px;
-  margin: -1px -4px;
-  border-radius: 3px;
-}
-
-/* v0.11.0: left-side group holding the signature link plus any modifier
-   chips, so .entry-row's space-between keeps the metadata column pinned
-   right with chips sitting immediately after the signature. */
-.entry-main {
   display: inline-flex;
   align-items: baseline;
   gap: 0.5rem;
   min-width: 0;
 }
-
-/* v0.11.0 modifier chips (spec §8.3): reuse the flow-page badge family
-   (.badge.badge-modifier provides the fill); this class only sizes the
-   chip for the index row context. */
-.entry-mod-chip {
+.bookmark-link code.src {
+  background: transparent;
+  font-size: 13px;
+}
+.bookmark-kind,
+.bookmark-contract {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-faint);
   flex-shrink: 0;
 }
 
-/* v0.15.0 pins (spec §8.3): a pushpin toggle rendered as a server-side
-   link + inline SVG (no JavaScript). Outline in muted chrome when off; filled
-   with --tok-number when on — the one warm color already in the palette, reused
-   so no new accent enters the UI and it themes via the token's three palette
-   definitions. Red stays reserved for "unresolved". */
+/* --- group divider + contract sections ---------------------------------- */
+.index-group { margin: 0 0 2rem; }
+/* Subtle Project / Tests / Dependencies divider above each group's contracts. */
+.group-heading {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--fg-faint);
+  margin: 1.25rem 0 0.75rem;
+}
+
+.contract-block { margin: 0 0 1.25rem; }
+/* Clickable header → toggle collapse (index.js). Chevron + pin + name + path +
+   N entries. Expanded by default; with JS off the header is inert (no collapse)
+   and the body stays open. */
+.contract-name {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+  padding: 0.35rem 0.4rem;
+  border-bottom: 0.5px solid var(--border-soft);
+  cursor: pointer;
+}
+.contract-name:hover { background: var(--row-sel); }
+.contract-name-text { color: var(--fg-text); }
+.contract-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-muted);
+}
+.contract-entry-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-faint);
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+/* Rotating collapse chevron (SVG M6 9l6 6 6-6): down when expanded, -90° when
+   collapsed. Shared shape with the Bindings fold + Reads chevrons. */
+.collapse-chevron,
+.reads-chevron {
+  flex: 0 0 auto;
+  align-self: center;
+  color: var(--fg-muted);
+  line-height: 0;
+}
+.collapse-chevron svg,
+.reads-chevron svg { display: block; }
+.reads-chevron { color: var(--fg-faint); }
+.contract-block[data-collapsed] .collapse-chevron { transform: rotate(-90deg); }
+.contract-block[data-collapsed] .contract-body { display: none; }
+
+.contract-body { padding-left: 0.4rem; }
+.entry-section { margin: 0.4rem 0 0.6rem; }
+.entry-section:last-child { margin-bottom: 0; }
+/* Writes · N / Reads · N sub-headings. Reads is independently collapsible. */
+.section-heading {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-faint);
+  margin: 0.6rem 0 0.3rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.section-heading[data-toggle-reads] { cursor: pointer; }
+.entry-section[data-collapsed] .reads-chevron { transform: rotate(-90deg); }
+.entry-section[data-collapsed] .entry-list { display: none; }
+
+.entry-list { list-style: none; margin: 0; padding: 0; }
+.entry-list li { margin: 0; }
+
+/* Entry row: caret gutter · pin · signature (wraps after commas) · modifier
+   chips · right-aligned meta. Reviewed rows dim the signature; the keyboard-
+   selected row fills with --row-sel and reveals its caret. */
+.entry-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 3px 6px;
+  border-radius: 5px;
+}
+.entry-row.is-selected { background: var(--row-sel); }
+.entry-caret {
+  flex: 0 0 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: transparent;
+  user-select: none;
+}
+.entry-row.is-selected .entry-caret { color: var(--mod-soft); }
+.entry-main {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.entry-link {
+  text-decoration: none;
+  color: var(--fg-text);
+}
+/* pygments.css drops `.src { background: #f8f8f8 }` on every .src; override it
+   to transparent here (as the node bodies do) so the signature carries no pill.
+   13px + wrap-after-commas: the server inserts a zero-width space after each
+   comma (highlight_signature), and these rules let a long list wrap between
+   arguments instead of overflowing the row. */
+.entry-link code.src {
+  background: transparent;
+  font-size: 13px;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+.entry-link:hover code,
+.entry-link:focus code { text-decoration: underline; }
+.entry-row.viewed .entry-link { opacity: 0.5; }
+
+/* Modifier chips (Writes rows only) — softer than the solid flow-page badge so
+   a column of them stays calm. A Writes row with NO chip is itself the signal
+   (an unprotected state-changing entry point), the deliberate §8.3 asymmetry. */
+.entry-mod-chip {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 0.05rem 0.3rem;
+  border-radius: 2px;
+  background: var(--idx-mod-bg);
+  color: var(--idx-mod-text);
+  border: 0.5px solid var(--idx-mod-border);
+  white-space: nowrap;
+}
+
+/* Right meta column: ✓ reviewed (neutral) · N unr chip · dN depth. */
+.entry-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-variant-numeric: tabular-nums;
+}
+.meta-reviewed { color: var(--fg-faint); }
+.meta-depth { color: var(--fg-muted); }
+/* `N unr` is a chip in the --node-unresolved-* family so it rhymes with the
+   UnresolvedNode borders on the Flow page. The dark blocks calm the fill. */
+.meta-unresolved {
+  color: var(--node-unresolved-border);
+  background: var(--node-unresolved-bg);
+  border: 0.5px solid var(--node-unresolved-border);
+  border-radius: 2px;
+  padding: 0.05rem 0.3rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .meta-unresolved {
+    background: rgba(201, 112, 112, 0.09);
+    border-color: rgba(201, 112, 112, 0.50);
+    color: #c79292;
+  }
+}
+:root[data-theme="dark"] .meta-unresolved {
+  background: rgba(201, 112, 112, 0.09);
+  border-color: rgba(201, 112, 112, 0.50);
+  color: #c79292;
+}
+
+/* --- pushpin toggle (shared with the Flow page) ------------------------- */
+/* Outline in faint chrome when off; filled with --tok-number when on (the one
+   warm color already in the palette — red stays reserved for "unresolved"). */
 .bookmark-toggle {
   flex-shrink: 0;
   align-self: center;
@@ -738,6 +1063,10 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   stroke-linejoin: round;
   stroke-linecap: round;
 }
+/* Index pins read in the tertiary --fg-faint chrome (per the redesign); the
+   Flow-page toggle keeps the --fg-muted default from the base rule above. */
+.index-main .bookmark-ico,
+.index-sidebar .bookmark-ico { stroke: var(--fg-faint); }
 .bookmark-toggle:hover .bookmark-ico,
 .bookmark-toggle:focus-visible .bookmark-ico {
   stroke: var(--fg-text);
@@ -747,10 +1076,8 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   stroke: var(--tok-number);
   stroke-width: 1.2;
 }
-/* v0.16.0: scale the flow-header bookmark toggle up so it reads in proportion
-   with the enlarged header controls (← index / Expand all / etc.). The CSS size
-   overrides the SVG's 13px width/height attribute; index-row toggles keep their
-   smaller row-sized default. */
+/* v0.16.0: scale the flow-header bookmark toggle up to match the header chrome;
+   index-row toggles keep their smaller row-sized default. */
 .flow-nav .bookmark-ico {
   width: 18px;
   height: 18px;
@@ -759,53 +1086,7 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   padding: 0.15rem;
 }
 
-/* v0.15.0 Bookmarked section: sits above the contract groups and shares the
-   group-heading family. A flat list of quick links — contracts to their block
-   anchor, entries to their Flow page — each with its (already-on) toggle to
-   remove the bookmark. */
-.index-bookmarked {
-  margin: 0 0 3rem;
-}
-.bookmark-list {
-  list-style: none;
-  margin: 0;
-  padding: 0 0 0 1rem;
-}
-.bookmark-item {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  margin: 0.2rem 0;
-}
-.bookmark-link {
-  text-decoration: none;
-  color: var(--fg-text);
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  min-width: 0;
-}
-.bookmark-kind,
-.bookmark-contract {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--fg-muted);
-  flex-shrink: 0;
-}
-
-/* v0.15.0 viewed marker (ask: color already-viewed functions). Opening a Flow
-   records its entry id in the solflow_viewed cookie; the index adds the `viewed`
-   class to those rows. Server-side, no JavaScript, fully styleable (chosen over
-   the browser's :visited state, which can't be reliably rendered everywhere and
-   is CSS-restricted to a faint wash). The highlight uses the base .entry-link
-   padding/radius for a neat pill behind the signature. */
-.entry-row.viewed .entry-link {
-  background: var(--seen-bg);
-}
-
-/* v0.15.0 persistent bookmarks shortcut (ask: reach bookmarks from anywhere). A
-   fixed anchor to the #bookmarked section, visible at any scroll position. Plain
-   <a>, server-rendered count — no JavaScript. */
+/* Persistent jump-to-Pinned shortcut — fixed, visible at any scroll position. */
 .bookmark-jump {
   position: fixed;
   right: 1rem;
@@ -835,87 +1116,38 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   font-size: 12px;
 }
 
-/* v0.15.0: when the bookmark toggle redirects back to a row/contract anchor, give
-   the target a little breathing room from the page top instead of landing flush. */
+/* Bookmark redirects land on row / contract anchors with breathing room. */
 .entry-row,
 .contract-block {
   scroll-margin-top: 1rem;
 }
 
-/* v0.8.0 per-entry metadata column. `N unr` carries the same red used by
-   UnresolvedNode borders on Flow pages (--node-unresolved-border), so the
-   visual cue rhymes between the index and the source body it points at.
-   `dN` uses --fg-muted. Separator dot (when both annotations present)
-   matches the muted chrome around it. */
-.entry-meta {
+/* Keyboard-nav footer hint (revealed by index.js; the keys are JS-only). */
+.index-keys {
   font-family: var(--font-mono);
-  font-size: 11px;
-  white-space: nowrap;
-  flex-shrink: 0;
-  display: inline-flex;
-  gap: 0.3rem;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+  line-height: 1.8;
+  margin: 1.5rem 0 0.5rem;
 }
+.index-keys .keys-label { color: var(--fg-muted); }
+.index-keys .key { color: var(--fg-text); }
 
-/* v0.11.0: `N unr` is a chip, not bare colored text — the unresolved count
-   is where the tool is blind, which is the first thing an auditor triages;
-   the fill + border make it scannable at a glance. Palette stays in the
-   --node-unresolved-* family (both modes defined), per §8.3. */
-.meta-unresolved {
-  color: var(--node-unresolved-border);
-  background: var(--node-unresolved-bg);
-  border: 0.5px solid var(--node-unresolved-border);
-  border-radius: 2px;
-  padding: 0.05rem 0.3rem;
-}
-
-/* v0.14.1: calm the `N unr` chip in dark mode. The light-tuned salmon fill
-   (#c97070 on #2e1818) read too hot stacked down the index column against
-   the cool dark canvas. Drop the solid fill to a faint wash, soften the
-   border, and mute the text — still clearly red and scannable (P4), just not
-   shouting. The Flow-page UnresolvedNode keeps the full --node-unresolved-*
-   red: those are single in-graph blind-spot markers, not a repeated column.
-   Two selectors mirror the Auto (prefers-color-scheme) and forced
-   (data-theme="dark") paths; light mode is unchanged. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .meta-unresolved {
-    background: rgba(201, 112, 112, 0.09);
-    border-color: rgba(201, 112, 112, 0.50);
-    color: #c79292;
-  }
-}
-:root[data-theme="dark"] .meta-unresolved {
-  background: rgba(201, 112, 112, 0.09);
-  border-color: rgba(201, 112, 112, 0.50);
-  color: #c79292;
-}
-
-.meta-depth,
-.meta-sep {
-  color: var(--fg-muted);
-}
-
-.entry-link code {
+/* Chips legend — keys render through the SAME classes as the live chips so the
+   legend stays self-verifying against the rows above. */
+.index-legend {
+  margin: 1.5rem 0 0.75rem;
+  font-family: var(--font-mono);
   font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.7;
 }
+.scope-chrome,
+.index-legend .scope-chrome { color: var(--fg-muted); }
+.index-legend .meta-unresolved,
+.index-legend .meta-depth { font-size: 11px; }
 
-/* v0.7.0: index entry signatures render through Pygments under
-   `<code class="src">`. pygments.css drops `.src { background: #f8f8f8; }`
-   on every `.src` element; node bodies override it to transparent via
-   `.node-body.src` above, and index entries need the same override or
-   they'd carry a light-gray pill behind the contract.function text. */
-.entry-link code.src {
-  background: transparent;
-}
-
-.entry-link:hover code,
-.entry-link:focus code {
-  text-decoration: underline;
-}
-
-/* v0.8.0 privacy footer: one-line documentation of the localhost-only
-   execution model, rendered in muted chrome under a soft top border. The
-   text content is the auditor's first-glance assurance that the page they
-   landed on cannot upload code. */
+/* Privacy footer — localhost-only assurance + AGPL source link. */
 .privacy-footer {
   margin: 3rem 0 1rem;
   padding-top: 1rem;
@@ -924,14 +1156,31 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
   color: var(--fg-muted);
   text-align: center;
 }
-
-/* v0.10.1 source link in the privacy footer: the only interactive element in
-   the footer (§8.3). Overrides the muted-chrome color the rest of the footer
-   inherits so the link reads as a link. --node-mod-border carries the ink-blue
-   tuned for both light and dark mode (light #3a6db0, dark #6b94c8). */
 .privacy-footer .source-link {
   color: var(--node-mod-border);
   text-decoration: underline;
+}
+
+/* Focus rings + touch hygiene for the new interactive controls (WIG). */
+.facet:focus-visible,
+.sort-seg:focus-visible,
+.nav-row:focus-visible,
+.contract-name:focus-visible,
+.section-heading:focus-visible,
+.index-bindings-head:focus-visible,
+.bindings-save-btn:focus-visible,
+.bindings-showall:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .fold-chevron,
+  .collapse-chevron,
+  .reads-chevron { transition: transform 0.15s ease; }
+  .contract-name,
+  .nav-row,
+  .facet,
+  .bindings-save-btn { transition: background-color 120ms ease, color 120ms ease; }
 }
 
 /* ----- error page (v0.10.4) ---------------------------------------------- */

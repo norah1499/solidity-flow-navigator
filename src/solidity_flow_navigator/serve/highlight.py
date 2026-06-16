@@ -76,9 +76,19 @@ def highlight_signature(
 
     Returns the bare span sequence (no wrapping element). The trailing
     newline Pygments appends is stripped so the output stays inline-safe.
+
+    v0.20.0 redesign (§8.3): a zero-width space (U+200B) is inserted after
+    every comma so a long parameter list wraps cleanly *between* arguments
+    when the index entry row lets signatures wrap, instead of overflowing on
+    one unbreakable line. This is done server-side here — not by tokenizing in
+    JS — so the no-JS listing wraps too. Commas only appear as literal source
+    punctuation in this synthetic declaration (never inside a tag or attribute
+    in Pygments' output), so a plain string replace is safe; the ZWSP carries
+    no visual width and is dropped from copy/paste by most clients.
     """
     declaration = f"function {name}{signature_suffix} {mutability_suffix}"
-    return highlight(declaration, _LEXER, _FORMATTER).rstrip("\n")
+    html = highlight(declaration, _LEXER, _FORMATTER).rstrip("\n")
+    return html.replace(",", ",\u200b")
 
 
 def write_pygments_css(static_dir: Path) -> Path:

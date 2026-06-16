@@ -126,26 +126,22 @@ def test_index_lists_solmate_application_contracts(client: FlaskClient) -> None:
 def _extract_contract_block(body: str, contract_name: str) -> str:
     """Return the substring of ``body`` covering one contract's ``<article>``.
 
-    The index template emits one ``<article class="contract-block">`` per
-    contract. We locate the article whose ``<h3>`` opens with ``contract_name``
-    followed by a newline (the template formatting), then slice to the next
-    ``</article>``. Avoids pulling in an HTML parser for what is a simple
-    boundary problem at this scale.
+    The index template emits one ``<article class="contract-block" ...
+    data-name="<contract>">`` per contract. v0.20.0 (the two-pane redesign)
+    restructured the ``<h3>`` header, so we locate the article by its
+    ``data-name`` attribute — stable across markup changes and unique to the
+    article (the navigator rows carry ``data-nav``, entry rows ``data-fn``) —
+    then slice to the next ``</article>``. Avoids pulling in an HTML parser for
+    what is a simple boundary problem at this scale.
     """
-    # v0.15.0: the article now carries an id anchor (id="c-<slug>") for the
-    # bookmark return-to-row redirect, so match the opening tag without the ``>``.
-    needle = '<article class="contract-block"'
-    start = 0
-    while True:
-        article_start = body.find(needle, start)
-        assert article_start != -1, f"no contract block found for {contract_name}"
-        article_end = body.find("</article>", article_start)
-        assert article_end != -1, "unterminated <article> in rendered index"
-        block = body[article_start:article_end]
-        # The <h3> renders the name followed by a newline before the path span.
-        if f">\n        {contract_name}\n" in block or f">{contract_name}\n" in block:
-            return block
-        start = article_end
+    needle = f'data-name="{contract_name}"'
+    idx = body.find(needle)
+    assert idx != -1, f"no contract block found for {contract_name}"
+    article_start = body.rfind("<article", 0, idx)
+    assert article_start != -1, f"no <article> wrapping {contract_name}"
+    article_end = body.find("</article>", article_start)
+    assert article_end != -1, "unterminated <article> in rendered index"
+    return body[article_start:article_end]
 
 
 def test_index_sub_groups_both_sections_for_mixed_contract(
@@ -163,10 +159,11 @@ def test_index_sub_groups_both_sections_for_mixed_contract(
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
     block = _extract_contract_block(body, "ERC4626")
-    # v0.8.0: section headings now carry a "· N" count suffix per spec §8.3,
-    # so the literal `>Writes<` shape no longer appears.
-    assert ">Writes · " in block, "Writes section missing from ERC4626 block"
-    assert ">Reads · " in block, "Reads section missing from ERC4626 block"
+    # v0.8.0: section headings carry a "· N" count suffix (spec §8.3). v0.20.0:
+    # the Reads heading leads with a collapse chevron, so match the heading text
+    # without requiring a literal ">" immediately before it.
+    assert "Writes · " in block, "Writes section missing from ERC4626 block"
+    assert "Reads · " in block, "Reads section missing from ERC4626 block"
 
 
 def test_index_omits_empty_section_for_single_kind_contract(
@@ -209,13 +206,13 @@ def test_index_omits_empty_section_for_single_kind_contract(
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
     block = _extract_contract_block(body, contract_name)
-    # v0.8.0: section heading is `<heading>Present · N</heading>`; check both
-    # the leading marker and the section-count suffix together.
+    # v0.8.0: section heading is `Present · N`; v0.20.0 leads the Reads heading
+    # with a chevron, so match the heading text without a literal ">" prefix.
     assert (
-        f">{present} · " in block
+        f"{present} · " in block
     ), f"{present} section missing from {contract_name} block"
     assert (
-        f">{absent} · " not in block
+        f"{absent} · " not in block
     ), f"{absent} placeholder header should be omitted for {contract_name}"
 
 
@@ -434,21 +431,24 @@ def test_index_route_passes_scope_and_total_unresolved(
 # -- v0.8.0 index rendering (Stage 3 HTML output) ---------------------------
 
 
-def test_index_header_renders_three_counts(client: FlaskClient) -> None:
-    """Spec §8.3 index header block: three right-aligned counts with the
-    numeric values in default text color and labels in --fg-muted chrome.
-    We assert each count is present in the rendered HTML alongside its
-    label. Exact numeric values come from the fixture state — we only
-    check that each ``.count-value`` / ``.count-label`` pair exists.
+def test_index_overview_block_renders_summary(client: FlaskClient) -> None:
+    """v0.20.0 redesign (spec §8.3): the three-count header is replaced by a
+    sidebar Overview block — ``N contracts · M entry points`` and a
+    ``R/M reviewed`` line. The global red ``untraced`` trust-budget count is
+    intentionally dropped: the redesign reframes unresolved as a neutral
+    per-contract fact in the navigator (never a risk/priority cue), so a global
+    red figure would contradict that stance.
     """
     rv = client.get("/")
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
-    # Header block present with the three labels in the canonical order.
-    assert '<header class="index-header">' in body
-    assert '<span class="count-label">contracts</span>' in body
-    assert '<span class="count-label">entry points</span>' in body
-    assert '<span class="count-label">untraced</span>' in body
+    assert 'class="index-overview"' in body
+    text = re.sub(r"<[^>]+>", "", body)
+    assert "contract" in text and "entry point" in text
+    assert "reviewed" in text
+    # The old three-count header (and its global untraced count) is gone.
+    assert 'class="index-header"' not in body
+    assert ">untraced<" not in body
 
 
 def test_index_drops_repo_path_subtitle_and_contract_prefix(
@@ -535,13 +535,14 @@ def test_index_singular_count_labels() -> None:
     app = create_app(facts, flows)
     app.config.update(TESTING=True)
     body = app.test_client().get("/").get_data(as_text=True)
+    # v0.20.0: counts live in the sidebar Overview line `1 contract · 1 entry
+    # point`. Strip tags so the <b>1</b> bolding doesn't split the phrase.
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", body))
+    assert "1 contract " in text, "singular count must read 'contract' (pluralization)."
     assert (
-        '<span class="count-label">contract</span>' in body
-    ), "singular count must read 'contract' (v0.11.0 pluralization)."
-    assert (
-        '<span class="count-label">entry point</span>' in body
-    ), "singular count must read 'entry point' (v0.11.0 pluralization)."
-    assert "1 contracts" not in body and "1 entry points" not in body
+        "1 entry point " in text
+    ), "singular count must read 'entry point' (pluralization)."
+    assert "1 contracts" not in text and "1 entry points" not in text
 
 
 def test_index_modifier_chips_on_mutating_rows_only(client: FlaskClient) -> None:
@@ -558,8 +559,10 @@ def test_index_modifier_chips_on_mutating_rows_only(client: FlaskClient) -> None
     assert (
         ">onlyOwner</span>" in owned_block
     ), "the onlyOwner chip must carry the modifier's name."
-    # No chips inside any Reads section, anywhere on the page.
-    for section_start in [m.start() for m in re.finditer(r">Reads · ", body)]:
+    # No chips inside any Reads section, anywhere on the page. v0.20.0 marks the
+    # read sub-section with data-section="read"; slice to its closing </section>.
+    for m in re.finditer(r'data-section="read"', body):
+        section_start = m.start()
         section_end = body.find("</section>", section_start)
         assert "entry-mod-chip" not in body[section_start:section_end], (
             "read-only rows must not render modifier chips (v0.11.0 §8.3 "
@@ -581,38 +584,34 @@ def test_main_css_unresolved_badge_is_chip(client: FlaskClient) -> None:
     ), "meta-unresolved must carry the unresolved family border (v0.11.0)."
 
 
-def test_index_header_counts_match_build_index_totals(
+def test_index_overview_counts_match_build_index_totals(
     client: FlaskClient,
     solmate_facts: RepoFacts,
     solmate_flows: tuple[Flow, ...],
 ) -> None:
-    """The numeric values in the header match the totals build_index
-    returned. Walks build_index directly to avoid pinning concrete numbers
-    that drift with Solmate."""
-    _, total_eps, total_contracts, total_unresolved = build_index(
-        solmate_facts, solmate_flows
-    )
+    """The numeric values in the sidebar Overview block match the totals
+    build_index returned. Walks build_index directly to avoid pinning concrete
+    numbers that drift with Solmate (v0.20.0 redesign)."""
+    _, total_eps, total_contracts, _ = build_index(solmate_facts, solmate_flows)
     rv = client.get("/")
     body = rv.get_data(as_text=True)
+    overview = body.split('class="index-overview"', 1)[1].split("</div>", 1)[0]
     assert (
-        f'<span class="count-value">{total_contracts}</span>' in body
-    ), f"contracts count {total_contracts} missing from header"
+        f"<b>{total_contracts}</b>" in overview
+    ), f"contracts count {total_contracts} missing from Overview"
     assert (
-        f'<span class="count-value">{total_eps}</span>' in body
-    ), f"entry points count {total_eps} missing from header"
-    assert (
-        f'<span class="count-value is-untraced">{total_unresolved}</span>' in body
-    ), f"untraced count {total_unresolved} missing from header"
+        f"<b>{total_eps}</b>" in overview
+    ), f"entry points count {total_eps} missing from Overview"
 
 
-def test_index_scope_line_renders_excluded_and_stub_paths(
+def test_index_scope_line_renders_excluded_and_stub_counts(
     solmate_facts: RepoFacts,
     solmate_flows: tuple[Flow, ...],
 ) -> None:
-    """Scope summary line renders excluded path globs from the active Scope
-    and the stub paths list, with the glob values themselves visible as
-    ``<code class="scope-glob">`` so the CSS can color them default-on-muted
-    (spec §8.3)."""
+    """v0.20.0 redesign (spec §8.3): the compact scope line reports the COUNT of
+    excluded path globs and stub paths — a neutral verification fact in the
+    Bindings card footer (or standalone when nothing is bindable), replacing the
+    verbose per-glob list."""
     from solidity_flow_navigator.flow.scope import Scope
 
     scope = Scope(
@@ -626,24 +625,15 @@ def test_index_scope_line_renders_excluded_and_stub_paths(
     rv = app.test_client().get("/")
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
-
-    # The literal "Scope" prefix appears in muted chrome.
-    assert '<span class="scope-chrome">Scope</span>' in body
-    # Both exclude globs render as scope-glob elements.
-    assert '<code class="scope-glob">**/*.t.sol</code>' in body
-    assert '<code class="scope-glob">**/mocks/**</code>' in body
-    # Stub path renders as scope-glob too.
-    assert '<code class="scope-glob">src/utils/dense/**</code>' in body
-    # When stubs are configured, the "none" sentinel must NOT appear.
-    assert '<span class="scope-none">none</span>' not in body
+    assert "Scope · excluded 2 paths · stub 1 path" in body
 
 
 def test_index_scope_line_renders_none_when_no_stubs(
     solmate_facts: RepoFacts,
     solmate_flows: tuple[Flow, ...],
 ) -> None:
-    """Spec §8.3: when no stubs are active, the literal word ``none``
-    renders in default text color in place of the stub list."""
+    """Spec §8.3: when no stubs are active, the compact scope line reads
+    ``stub none`` (v0.20.0)."""
     from solidity_flow_navigator.flow.scope import Scope
 
     scope = Scope(
@@ -656,16 +646,15 @@ def test_index_scope_line_renders_none_when_no_stubs(
     app.config.update(TESTING=True)
     rv = app.test_client().get("/")
     body = rv.get_data(as_text=True)
-    # The "none" sentinel is wrapped in .scope-none so the CSS can paint it
-    # in default text color rather than the surrounding muted chrome.
-    assert '<span class="scope-none">none</span>' in body
+    assert "Scope · excluded 1 path · stub none" in body
 
 
-def test_index_renders_chips_legend_below_scope_line(client: FlaskClient) -> None:
-    """v0.12.0 (spec §8.3): a ``Legend`` chrome line renders directly below
-    the scope summary, unconditionally, with each key rendered through the
-    SAME classes as the live chips (badge-modifier / meta-unresolved /
-    meta-depth) so the legend stays self-verifying against the rows."""
+def test_index_renders_chips_legend(client: FlaskClient) -> None:
+    """v0.12.0 (spec §8.3): a ``Legend`` chrome line renders unconditionally at
+    the foot of the main column, with each key rendered through the SAME classes
+    as the live chips (entry-mod-chip / meta-unresolved / meta-depth) so the
+    legend stays self-verifying against the rows. v0.20.0 moved the scope line
+    into the sidebar, so the legend no longer sits directly below it."""
     rv = client.get("/")
     assert rv.status_code == 200
     body = rv.get_data(as_text=True)
@@ -676,7 +665,7 @@ def test_index_renders_chips_legend_below_scope_line(client: FlaskClient) -> Non
     # Literal "Legend" prefix in muted chrome.
     assert '<span class="scope-chrome">Legend</span>' in legend
     # The three keys, each in its live chip class with its sample text.
-    assert "badge badge-modifier" in legend
+    assert "entry-mod-chip" in legend
     assert ">modifier</span>" in legend
     assert '<span class="meta-unresolved">2 unr</span>' in legend
     assert '<span class="meta-depth">d3</span>' in legend
@@ -684,8 +673,6 @@ def test_index_renders_chips_legend_below_scope_line(client: FlaskClient) -> Non
     assert "function with a modifier, none = no modifier" in legend
     assert "calls that couldn't be traced" in legend
     assert "max call depth" in legend
-    # Position: legend follows the scope summary line.
-    assert body.index('class="index-scope"') < body.index('class="index-legend"')
 
 
 def test_index_section_count_suffix_matches_entry_count(
@@ -1421,15 +1408,13 @@ def test_flow_progressive_dedups_builtins_strip(client: FlaskClient) -> None:
 
 
 def test_index_badges_carry_tooltips(client: FlaskClient) -> None:
-    """v0.10.4: the d{N} / 'N unr' shorthand and the header stats carry
-    native title tooltips — previously unexplained anywhere in the UI."""
+    """v0.10.4: the d{N} / 'N unr' shorthand carry native title tooltips —
+    previously unexplained anywhere in the UI. (v0.20.0 dropped the three-count
+    header, and with it the header-stat tooltips.)"""
     body = client.get("/").get_data(as_text=True)
     assert 'class="meta-depth" title="max call depth ' in body, (
         "meta-depth badges must carry a title tooltip explaining d{N} " "(v0.10.4)."
     )
-    assert (
-        'class="count-item" title="' in body
-    ), "index header count items must carry title tooltips (v0.10.4)."
     # meta-unresolved only renders when a flow has unresolved calls; Solmate's
     # default-scope index has at least one (brutalized/low-level shapes), but
     # don't hard-require it — pin the template instead via the unfiltered
@@ -1829,21 +1814,16 @@ def test_index_no_bookmark_jump_without_bookmarks(client: FlaskClient) -> None:
     assert 'id="bookmarked"' not in body
 
 
-def test_main_css_viewed_row_uses_seen_bg(client: FlaskClient) -> None:
-    """Viewed rows (server-tracked via the solflow_viewed cookie) are tinted with
-    the --seen-bg token, defined in all three palette blocks (light, auto-dark,
-    forced-dark) so it themes correctly."""
+def test_main_css_viewed_row_dims_signature(client: FlaskClient) -> None:
+    """v0.20.0 redesign (spec §8.3): a reviewed (opened) row dims its signature
+    to opacity .5 — the redesign's neutral 'already-looked-at' cue, paired with a
+    ✓ in the meta column — replacing the v0.15.0 --seen-bg pill. Server-tracked
+    via the solflow_viewed cookie."""
     css = client.get("/static/css/main.css").get_data(as_text=True)
     start = css.find(".entry-row.viewed .entry-link {")
-    assert start != -1, "main.css must style .entry-row.viewed (v0.15.0 viewed)."
+    assert start != -1, "main.css must style .entry-row.viewed (the viewed cue)."
     block = css[start : css.find("}", start)]
-    assert (
-        "var(--seen-bg)" in block
-    ), ".entry-row.viewed must use --seen-bg (the viewed cue)."
-    assert css.count("--seen-bg:") == 3, (
-        "--seen-bg must be defined in all three palette blocks (light, auto-dark, "
-        "forced-dark) so the viewed tint themes correctly."
-    )
+    assert "opacity" in block, ".entry-row.viewed must dim the signature (opacity)."
 
 
 def test_flow_page_records_view_in_cookie(
@@ -2217,7 +2197,7 @@ def test_bindings_panel_renders_with_seeded_binding(
     app.config.update(TESTING=True)
     html = app.test_client().get("/").get_data(as_text=True)
     assert 'id="bindings"' in html
-    assert "Save bindings" in html
+    assert "Save to solflow.toml" in html
     assert "IFoo" in html
     assert 'value="Bar" selected' in html  # out-of-candidate bound value kept
     assert "bindings-set" in html  # the no-JS fallback submit

@@ -3,263 +3,307 @@
 {% block body_class %}index-page{% endblock %}
 
 {% block content %}
-{# v0.15.0 pins (spec §8.3): a pushpin toggle. Each is a real server-side link
-   to /bookmark/<kind>/<id> (route name kept internal — works with no JavaScript;
-   the fallback reloads and returns to this row). index.js progressively enhances
-   the click to toggle in place without a reload, so the auditor stays exactly
-   where they are. ``on`` picks filled (terracotta) vs outline. ``tilt`` rotates
-   the pin: 25° in the main listing, 0° (upright) in the Pinned collection. #}
+{# v0.20.0 redesign (spec §8.3): the index is reframed as a two-pane attack-
+   surface map — a sticky left sidebar (run summary, foldable Bindings card,
+   contract navigator) beside a main column whose search / filter / sort controls
+   sit at the very top, above a per-contract listing. Every server-rendered
+   feature degrades with JavaScript off; facets, sort, collapse, the bindings
+   fold, keyboard nav, and scroll-spy are JS-only enhancements (index.js). #}
+
+{# v0.15.0 pins (spec §8.3): a pushpin toggle. Each is a real server-side link to
+   /bookmark/<kind>/<id> (works with no JavaScript; the fallback reloads and
+   returns to this row). index.js enhances the click to toggle in place. ``tilt``
+   rotates the pin: 25° in the listing, 0° (upright) in the Pinned collection. #}
 {% macro bookmark_toggle(kind, ident, on, tilt=25) -%}
 {% set anchor = ('e-' if kind == 'entry' else 'c-') ~ (ident | anchor_slug) -%}
-<a class="bookmark-toggle{{ ' is-on' if on }}" href="{{ url_for('toggle_bookmark', kind=kind, ident=ident, next=request.path + '#' + anchor) }}" aria-pressed="{{ 'true' if on else 'false' }}" title="{{ 'Unpin' if on else 'Pin' }}" aria-label="{{ 'Unpin' if on else 'Pin' }}"><svg class="bookmark-ico" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><g transform="rotate({{ tilt }} 12 12)"><path d="M16 12V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v8c0 1.1-.9 2-2 2v2h5.2v6l.8.8.8-.8v-6H18v-2c-1.1 0-2-.9-2-2z"/></g></svg></a>
+<a class="bookmark-toggle{{ ' is-on' if on }}" href="{{ url_for('toggle_bookmark', kind=kind, ident=ident, next=request.path + '#' + anchor) }}" aria-pressed="{{ 'true' if on else 'false' }}" title="{{ 'Unpin' if on else 'Pin' }}" aria-label="{{ 'Unpin' if on else 'Pin' }}"><svg class="bookmark-ico" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g transform="rotate({{ tilt }} 12 12)"><path d="M16 12V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v8c0 1.1-.9 2-2 2v2h5.2v6l.8.8.8-.8v-6H18v-2c-1.1 0-2-.9-2-2z"/></g></svg></a>
 {%- endmacro %}
-<header class="index-header">
-  <div class="index-header-row">
-    <h1 class="index-title">Overview</h1>
-    {# v0.10.4: native title tooltips on the stats and per-entry badges —
-       the d{N} / "N unr" shorthand was unexplained anywhere in the UI. #}
-    {# v0.11.0: labels pluralize with their counts; the repo-path subtitle
-       that duplicated the site header's path is gone (spec §8.3). #}
-    <ul class="index-counts">
-      <li class="count-item" title="Contracts that expose at least one entry point">
-        <span class="count-value">{{ total_contracts }}</span>
-        <span class="count-label">contract{{ 's' if total_contracts != 1 }}</span>
-      </li>
-      <li class="count-item" title="Functions callable from outside — each opens its own Flow">
-        <span class="count-value">{{ total_entry_points }}</span>
-        <span class="count-label">entry point{{ 's' if total_entry_points != 1 }}</span>
-      </li>
-      <li class="count-item" title="Calls that couldn't be traced to a function body — low-level calls and unbound interfaces">
-        <span class="count-value{{ ' is-untraced' if total_unresolved }}">{{ total_unresolved }}</span>
-        <span class="count-label">untraced</span>
-      </li>
-    </ul>
-  </div>
-</header>
 
-<p class="index-scope">
-  <span class="scope-chrome">Scope</span>
-  <span class="scope-chrome">·</span>
-  <span class="scope-chrome">excluded</span>
-  {% for glob in scope.exclude_paths -%}
-    <code class="scope-glob">{{ glob }}</code>{% if not loop.last %}<span class="scope-chrome">,</span>{% endif %}
-  {% endfor %}
-  <span class="scope-chrome">·</span>
-  <span class="scope-chrome">stub</span>
-  {%- if scope.stub_paths %}
-    {% for glob in scope.stub_paths -%}
-      <code class="scope-glob">{{ glob }}</code>{% if not loop.last %}<span class="scope-chrome">,</span>{% endif %}
-    {% endfor %}
-  {%- else %}
-    <span class="scope-none">none</span>
-  {%- endif %}
-</p>
+{# A simple disclosure chevron (down when open, rotated -90° when closed via CSS).
+   Shared by the Bindings fold, contract collapse, and the Reads sub-section. #}
+{% macro chevron(size, cls) -%}
+<span class="{{ cls }}"><svg viewBox="0 0 24 24" width="{{ size }}" height="{{ size }}" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+{%- endmacro %}
 
-{# v0.18.0 (spec §8.3, §13.2): Bindings panel. One row per bindable interface;
-   each row is a real GET form to /bind/<iface> with a "Set" submit, so picking a
-   concrete contract resolves that interface at every call site across every Flow
-   — and works with no JavaScript. "Save to solflow.toml" (POST /bindings/save)
-   persists the current bindings so they survive a restart (the one place solflow
-   writes to the working directory). index.js collapses a long list behind a
-   "Show all" toggle and auto-applies on change (hiding the per-row "Set"); with
-   JS off the full list and all controls render server-side. Renders only when at
-   least one interface is bindable. Sits at the top of the panels, above Pinned. #}
-{% if bindable %}
-<section class="index-bindings" id="bindings" aria-label="Interface bindings">
-  <div class="index-bindings-head">
-    <h2 class="group-heading">Bindings</h2>
-    <form class="bindings-save" method="post" action="{{ url_for('save_bindings') }}">
-      <button class="bindings-save-btn" type="submit" title="Save these bindings to solflow.toml so they're here next time you run solflow">Save bindings</button>
-    </form>
-  </div>
-  {% if saved == 'ok' %}
-  <p class="bindings-result is-ok" role="status">Saved to solflow.toml.</p>
-  {% elif saved == 'error' %}
-  <p class="bindings-result is-error" role="status">Could not write solflow.toml — see the server log.</p>
-  {% endif %}
-  <p class="bindings-hint">Point an interface at the contract behind it &mdash; applies across every Flow &middot; Save to keep it next time</p>
-  <ul class="bindings-list" id="bindings-list">
-    {% for b in bindable %}
-    <li class="bindings-row{{ ' is-bound' if b.bound_to }}" data-bind-row>
-      <span class="bindings-iface"><code class="src">{{ b.interface }}</code></span>
-      <form class="bindings-form" method="get" action="{{ url_for('set_binding', iface=b.interface) }}">
-        <input type="hidden" name="next" value="/#bindings">
-        <span class="bindings-arrow" aria-hidden="true">&rarr;</span>
-        <select class="node-bind-select bindings-select" name="contract" aria-label="Concrete contract for {{ b.interface }}">
-          <option value="__none__"{% if not b.bound_to %} selected{% endif %}>&mdash; unbound &mdash;</option>
-          {% for c in b.candidates %}
-          <option value="{{ c }}"{% if b.bound_to == c %} selected{% endif %}>{{ c }}</option>
+<div class="index-layout">
+  {# ===== left sidebar ===== #}
+  <aside class="index-sidebar">
+    {# --- Overview block: run summary --- #}
+    <div class="index-overview">
+      <p class="index-overview-label">Overview</p>
+      <p class="index-overview-line">
+        <b>{{ total_contracts }}</b> contract{{ 's' if total_contracts != 1 }}
+        <span class="ov-sep">·</span>
+        <b>{{ total_entry_points }}</b> entry point{{ 's' if total_entry_points != 1 }}
+      </p>
+      <p class="index-overview-line"><b>{{ total_reviewed }}</b>/{{ total_entry_points }} reviewed</p>
+    </div>
+
+    {# --- Bindings panel (foldable card) — spec §8.3, §13.2. One row per bindable
+       interface; each row is a real GET form to /bind/<iface>, so picking a
+       concrete contract resolves that interface at every call site with no
+       JavaScript. "Save to solflow.toml" (POST /bindings/save) persists the
+       bindings. index.js folds the card (localStorage), auto-applies on change,
+       and collapses a long list. Renders only when an interface is bindable;
+       otherwise the scope line stands alone in the sidebar (below). #}
+    {% if bindable %}
+    <section class="index-bindings" id="bindings" data-open aria-label="Interface bindings">
+      <div class="index-bindings-head" role="button" tabindex="0" aria-expanded="true" aria-controls="bindings-body">
+        {{ chevron(18, 'fold-chevron') }}
+        <span class="bindings-glyph" aria-hidden="true">⇄</span>
+        <h2 class="bindings-title">Bindings</h2>
+        <span class="bindings-collapsed-summary">{{ bindable | length }} interface{{ 's' if bindable | length != 1 }} · {{ bindable | selectattr('bound_to') | list | length }} bound</span>
+      </div>
+      <div class="index-bindings-body" id="bindings-body">
+        <p class="bindings-hint">Resolve an interface into the contract behind it, applied <b>across every Flow</b>.</p>
+        {% if saved == 'ok' %}
+        <p class="bindings-result is-ok" role="status">Saved to solflow.toml.</p>
+        {% elif saved == 'error' %}
+        <p class="bindings-result is-error" role="status">Could not write solflow.toml — see the server log.</p>
+        {% endif %}
+        <ul class="bindings-list" id="bindings-list">
+          {% for b in bindable %}
+          <li class="bindings-row{{ ' is-bound' if b.bound_to }}" data-bind-row>
+            <div class="bindings-row-head">
+              <span class="bindings-iface"><code class="src">{{ b.interface }}</code></span>
+              <span class="bindings-meta">{{ b.call_sites }} site{{ 's' if b.call_sites != 1 }}</span>
+            </div>
+            <form class="bindings-form" method="get" action="{{ url_for('set_binding', iface=b.interface) }}">
+              <input type="hidden" name="next" value="/#bindings">
+              <select class="node-bind-select bindings-select" name="contract" aria-label="Concrete contract for {{ b.interface }}">
+                <option value="__none__"{% if not b.bound_to %} selected{% endif %}>&mdash; unbound &mdash;</option>
+                {% for c in b.candidates %}
+                <option value="{{ c }}"{% if b.bound_to == c %} selected{% endif %}>{{ c }}</option>
+                {% endfor %}
+                {%- if b.bound_to and b.bound_to not in b.candidates %}
+                {# A binding to a contract not among detected candidates (set via
+                   --bind, or now out of scope). Keep it selectable so it shows
+                   and can be cleared. #}
+                <option value="{{ b.bound_to }}" selected>{{ b.bound_to }}</option>
+                {%- endif %}
+              </select>
+              <button class="bindings-set" type="submit">Set</button>
+            </form>
+          </li>
           {% endfor %}
-          {%- if b.bound_to and b.bound_to not in b.candidates %}
-          {# A binding to a contract not among detected candidates (set via --bind,
-             or now out of scope). Keep it selectable so it shows and can be cleared. #}
-          <option value="{{ b.bound_to }}" selected>{{ b.bound_to }}</option>
-          {%- endif %}
-        </select>
-        <button class="bindings-set" type="submit">Set</button>
-      </form>
-      <span class="bindings-meta">{{ b.call_sites }} call site{{ 's' if b.call_sites != 1 }}</span>
-    </li>
-    {% endfor %}
-  </ul>
-</section>
-{% endif %}
+        </ul>
+        <form class="bindings-save" method="post" action="{{ url_for('save_bindings') }}">
+          <button class="bindings-save-btn" type="submit" title="Save these bindings to solflow.toml so they're here next time you run solflow">Save to solflow.toml</button>
+        </form>
+        <p class="bindings-scope">Scope · excluded {{ scope.exclude_paths | length }} path{{ 's' if scope.exclude_paths | length != 1 }} · stub {% if scope.stub_paths %}{{ scope.stub_paths | length }} path{{ 's' if scope.stub_paths | length != 1 }}{% else %}none{% endif %}</p>
+      </div>
+    </section>
+    {% else %}
+    <p class="index-scope">Scope · excluded {{ scope.exclude_paths | length }} path{{ 's' if scope.exclude_paths | length != 1 }} · stub {% if scope.stub_paths %}{{ scope.stub_paths | length }} path{{ 's' if scope.stub_paths | length != 1 }}{% else %}none{% endif %}</p>
+    {% endif %}
 
-{# v0.15.0 (spec §8.3): the Pinned section renders only when the cookie holds
-   ids matching this analysis. Contracts link to their block anchor; entries link
-   to their Flow page. Each carries the same toggle (already "on", upright pin) to
-   unpin. A fixed shortcut (.bookmark-jump, below) anchors here from anywhere on
-   the page. It sits below the Bindings panel and above the contract listing/filter,
-   so the filter narrows only the contract listing below — the Pinned collection
-   stays put. #}
-{% set bookmark_count = (bookmarked_contracts | length) + (bookmarked_entries | length) %}
-{% if bookmark_count %}
-{# Persistent shortcut: a fixed anchor, visible at any scroll position, that jumps
-   to the Pinned section. Server-rendered count; plain <a>, no JavaScript. #}
-<a class="bookmark-jump" href="#bookmarked" title="Jump to pinned" aria-label="Jump to {{ bookmark_count }} pinned item{{ 's' if bookmark_count != 1 }}">
-  <svg class="bookmark-ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M16 12V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v8c0 1.1-.9 2-2 2v2h5.2v6l.8.8.8-.8v-6H18v-2c-1.1 0-2-.9-2-2z"/></svg>
-  <span class="bookmark-jump-count">{{ bookmark_count }}</span>
-</a>
-<section class="index-bookmarked" id="bookmarked" aria-label="Pinned">
-  <h2 class="group-heading">Pinned</h2>
-  <ul class="bookmark-list">
-    {% for contract in bookmarked_contracts %}
-    <li class="bookmark-item">
-      {{ bookmark_toggle('contract', contract.name, true, tilt=0) }}
-      <a class="bookmark-link" href="#c-{{ contract.name | anchor_slug }}">
-        <span class="bookmark-kind">contract</span>
-        <code class="src">{{ contract.name }}</code>
+    {# --- Contracts navigator: one row per contract, grouped by divider.
+       index.js makes each row a smooth-scroll jump to #c-<slug>, highlights the
+       contract currently in view (scroll-spy), and dims rows filtered out. #}
+    <nav class="index-nav" aria-label="Contracts">
+      <p class="index-overview-label">Contracts · {{ total_contracts }}</p>
+      {% for group in groups %}{% if group.contracts %}
+      <p class="index-nav-group">{{ group.label }}</p>
+      {% for contract in group.contracts %}
+      {% set count = contract.mutating_count + contract.read_only_count %}
+      <a class="nav-row" href="#c-{{ contract.name | anchor_slug }}" data-nav="{{ contract.name }}">
+        <span class="nav-row-top">
+          <span class="nav-name">{{ contract.name }}</span>
+          <span class="nav-count">{{ count }}</span>
+        </span>
+        <span class="nav-path">{{ contract.source_path }}</span>
+        <span class="nav-stat">{{ reviewed_by_contract[contract.name] }}/{{ count }} reviewed · {{ contract.unresolved_total }} unresolved</span>
       </a>
-    </li>
-    {% endfor %}
-    {% for ep in bookmarked_entries %}
-    <li class="bookmark-item">
-      {{ bookmark_toggle('entry', ep.url_id, true, tilt=0) }}
-      <a class="bookmark-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
-        <span class="bookmark-contract">{{ ep.contract_name }}</span>
-        <code class="src">{{ ep.signature_html | safe }}</code>
-      </a>
-    </li>
-    {% endfor %}
-  </ul>
-</section>
-{% endif %}
+      {% endfor %}
+      {% endif %}{% endfor %}
+    </nav>
+  </aside>
 
-{# v0.16.0 (spec §8.3): filter box. Rendered on the FIRST contract group's
-   heading row (sticky), so the control sits with the listing it narrows rather
-   than floating in a band of its own. Server-rendered but `hidden` so no-JS users
-   never see a dead control; index.js reveals it on load and narrows the listing
-   as the auditor types. The Pinned section above stays put (unfiltered). The
-   namespace flag places the filter once, on the first group that has contracts. #}
-{% set ns = namespace(filter_placed=false) %}
-{% for group in groups %}
-  {% if group.contracts %}
-  <section class="index-group">
-    {% if not ns.filter_placed %}
-    <div class="group-head-row">
-      <h2 class="group-heading">{{ group.label }}</h2>
-      <div class="index-filter" hidden>
-        <input class="index-filter-input" id="entry-filter" type="text" autocomplete="off" spellcheck="false" placeholder="Filter by function or contract…" aria-label="Filter entry points by signature or contract name">
-        <button class="index-filter-clear" id="entry-filter-clear" type="button" aria-label="Clear filter" title="Clear filter">&times;</button>
-        <span class="index-filter-count" id="entry-filter-count" aria-live="polite"></span>
+  {# ===== main column ===== #}
+  <div class="index-main">
+    {# --- control bar: facets (top), then filter + sort. Both rows are server-
+       rendered but `hidden`; index.js reveals and wires them, so no-JS users get
+       the full listing in default order with no dead controls. --- #}
+    <div class="index-controls">
+      <div class="facet-row" id="facet-row" hidden aria-label="Filter by kind">
+        <button class="facet is-active" type="button" data-facet="all">All <b>{{ facets.all }}</b></button>
+        <span class="facet-sep">·</span>
+        <button class="facet" type="button" data-facet="write">Writes <b>{{ facets.writes }}</b></button>
+        <span class="facet-sep">·</span>
+        <button class="facet" type="button" data-facet="read">Reads <b>{{ facets.reads }}</b></button>
+        <span class="facet-sep">·</span>
+        <button class="facet" type="button" data-facet="unguarded">Unguarded <b>{{ facets.unguarded }}</b></button>
+        <span class="facet-sep">·</span>
+        <button class="facet" type="button" data-facet="guarded">Guarded <b>{{ facets.guarded }}</b></button>
+      </div>
+      <div class="filter-sort-row">
+        <div class="index-filter" hidden>
+          <input class="index-filter-input" id="entry-filter" type="text" autocomplete="off" spellcheck="false" placeholder="Filter by function or contract…" aria-label="Filter entry points by signature or contract name">
+          <button class="index-filter-clear" id="entry-filter-clear" type="button" aria-label="Clear filter" title="Clear filter">&times;</button>
+          <span class="index-filter-count" id="entry-filter-count" aria-live="polite"></span>
+        </div>
+        <div class="sort-control" id="sort-control" hidden aria-label="Sort entry points">
+          <span class="sort-label">sort</span>
+          <span class="sort-segs">
+            <button class="sort-seg" type="button" data-sort="name">Name</button>
+            <button class="sort-seg" type="button" data-sort="depth">Depth</button>
+          </span>
+        </div>
       </div>
     </div>
-    {% set ns.filter_placed = true %}
-    {% else %}
-    <h2 class="group-heading">{{ group.label }}</h2>
-    {% endif %}
-    {% for contract in group.contracts %}
-    <article class="contract-block" id="c-{{ contract.name | anchor_slug }}" data-name="{{ contract.name }}">
-      <h3 class="contract-name">
-        {{ bookmark_toggle('contract', contract.name, ('c:' + contract.name) in bookmarked_ids) }}
-        {{ contract.name }}
-        <span class="contract-path">{{ contract.source_path }}</span>
-      </h3>
-      {% if contract.mutating_entry_points %}
-      <section class="entry-section">
-        <h4 class="section-heading">Writes · {{ contract.mutating_count }}</h4>
-        <ul class="entry-list">
-          {% for ep in contract.mutating_entry_points %}
-          <li class="entry-row{{ ' viewed' if ep.url_id in viewed_ids }}" id="e-{{ ep.url_id | anchor_slug }}">
-            {# v0.11.0 (spec §8.3): no Contract. prefix — the block heading
-               names the contract; modifier chips render on Writes rows
-               only (no chips = unprotected state-changing entry point). #}
-            <span class="entry-main">
-              {{ bookmark_toggle('entry', ep.url_id, ('e:' + ep.url_id) in bookmarked_ids) }}
-              <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
-                <code class="src">{{ ep.signature_html | safe }}</code>
-              </a>
-              {%- for m in ep.modifier_names %}
-              <span class="badge badge-modifier entry-mod-chip" title="Guarded by the {{ m }} modifier">{{ m }}</span>
-              {%- endfor %}
-            </span>
-            <span class="entry-meta">
-              {%- if ep.unresolved_count > 0 -%}
-                <span class="meta-unresolved" title="{{ ep.unresolved_count }} call(s) that couldn't be traced in this Flow — shown as red pills">{{ ep.unresolved_count }} unr</span>
-                <span class="meta-sep">·</span>
-              {%- endif -%}
-              <span class="meta-depth" title="max call depth {{ ep.max_depth }}">d{{ ep.max_depth }}</span>
-            </span>
-          </li>
-          {% endfor %}
-        </ul>
-      </section>
-      {% endif %}
-      {% if contract.read_only_entry_points %}
-      <section class="entry-section">
-        <h4 class="section-heading">Reads · {{ contract.read_only_count }}</h4>
-        <ul class="entry-list">
-          {% for ep in contract.read_only_entry_points %}
-          <li class="entry-row{{ ' viewed' if ep.url_id in viewed_ids }}" id="e-{{ ep.url_id | anchor_slug }}">
-            {# v0.11.0: Reads rows carry no modifier chips (deliberate
-               asymmetry, spec §8.3) but share the entry-main wrapper. #}
-            <span class="entry-main">
-              {{ bookmark_toggle('entry', ep.url_id, ('e:' + ep.url_id) in bookmarked_ids) }}
-              <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
-                <code class="src">{{ ep.signature_html | safe }}</code>
-              </a>
-            </span>
-            <span class="entry-meta">
-              {%- if ep.unresolved_count > 0 -%}
-                <span class="meta-unresolved" title="{{ ep.unresolved_count }} call(s) that couldn't be traced in this Flow — shown as red pills">{{ ep.unresolved_count }} unr</span>
-                <span class="meta-sep">·</span>
-              {%- endif -%}
-              <span class="meta-depth" title="max call depth {{ ep.max_depth }}">d{{ ep.max_depth }}</span>
-            </span>
-          </li>
-          {% endfor %}
-        </ul>
-      </section>
-      {% endif %}
-    </article>
-    {% endfor %}
-  </section>
-  {% endif %}
-{% endfor %}
 
-{# v0.12.0 (spec §8.3): chips legend — each key renders through the SAME
-   classes as the live chips so the legend stays self-verifying. Lives at the
-   foot of the page (a reference key consulted occasionally, not prime real
-   estate); renders unconditionally to keep page layout stable across targets. #}
-<p class="index-legend">
-  <span class="scope-chrome">Legend</span>
-  <span class="scope-chrome">·</span>
-  <span class="badge badge-modifier entry-mod-chip">modifier</span>
-  <span class="scope-chrome">function with a modifier, none = no modifier</span>
-  <span class="scope-chrome">·</span>
-  <span class="meta-unresolved">2 unr</span>
-  <span class="scope-chrome">calls that couldn't be traced</span>
-  <span class="scope-chrome">·</span>
-  <span class="meta-depth">d3</span>
-  <span class="scope-chrome">max call depth</span>
-</p>
+    {# --- Pinned (only when bookmarks match this analysis) — spec §8.3. Stays put
+       and unfiltered; the filter narrows only the contract listing below it. #}
+    {% set bookmark_count = (bookmarked_contracts | length) + (bookmarked_entries | length) %}
+    {% if bookmark_count %}
+    <a class="bookmark-jump" href="#bookmarked" title="Jump to pinned" aria-label="Jump to {{ bookmark_count }} pinned item{{ 's' if bookmark_count != 1 }}">
+      <svg class="bookmark-ico" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M16 12V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v8c0 1.1-.9 2-2 2v2h5.2v6l.8.8.8-.8v-6H18v-2c-1.1 0-2-.9-2-2z"/></svg>
+      <span class="bookmark-jump-count">{{ bookmark_count }}</span>
+    </a>
+    <section class="index-bookmarked" id="bookmarked" aria-label="Pinned">
+      <h2 class="pinned-heading">Pinned</h2>
+      <ul class="bookmark-list">
+        {% for contract in bookmarked_contracts %}
+        <li class="bookmark-item">
+          {{ bookmark_toggle('contract', contract.name, true, tilt=0) }}
+          <a class="bookmark-link" href="#c-{{ contract.name | anchor_slug }}">
+            <span class="bookmark-kind">contract</span>
+            <code class="src">{{ contract.name }}</code>
+          </a>
+        </li>
+        {% endfor %}
+        {% for ep in bookmarked_entries %}
+        <li class="bookmark-item">
+          {{ bookmark_toggle('entry', ep.url_id, true, tilt=0) }}
+          <a class="bookmark-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
+            <span class="bookmark-contract">{{ ep.contract_name }}</span>
+            <code class="src">{{ ep.signature_html | safe }}</code>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endif %}
+
+    {# --- contract sections, grouped by the Project / Tests / Dependencies
+       divider (kept). Each contract header toggles collapse (index.js); each
+       entry row carries facet/sort data attributes for the client-side controls. #}
+    {% for group in groups %}
+      {% if group.contracts %}
+      <section class="index-group" data-group="{{ group.label }}">
+        <h2 class="group-heading">{{ group.label }}</h2>
+        {% for contract in group.contracts %}
+        {% set count = contract.mutating_count + contract.read_only_count %}
+        <article class="contract-block" id="c-{{ contract.name | anchor_slug }}" data-name="{{ contract.name }}" data-nodes="{{ contract.node_count }}">
+          <h3 class="contract-name" data-toggle-contract role="button" tabindex="0" aria-expanded="true">
+            {{ chevron(16, 'collapse-chevron') }}
+            {{ bookmark_toggle('contract', contract.name, ('c:' + contract.name) in bookmarked_ids) }}
+            <span class="contract-name-text">{{ contract.name }}</span>
+            <span class="contract-path">{{ contract.source_path }}</span>
+            <span class="contract-entry-count">{{ count }} entr{{ 'y' if count == 1 else 'ies' }}</span>
+          </h3>
+          <div class="contract-body">
+          {% if contract.mutating_entry_points %}
+          <section class="entry-section" data-section="write">
+            <h4 class="section-heading">Writes · {{ contract.mutating_count }}</h4>
+            <ul class="entry-list">
+              {% for ep in contract.mutating_entry_points %}
+              <li class="entry-row{{ ' viewed' if ep.url_id in viewed_ids }}" id="e-{{ ep.url_id | anchor_slug }}" data-kind="write" data-guarded="{{ '1' if ep.modifier_names else '0' }}" data-fn="{{ ep.function_full_name }}" data-depth="{{ ep.max_depth }}" data-nodes="{{ ep.node_count }}">
+                <span class="entry-caret" aria-hidden="true">▸</span>
+                {# v0.11.0 (spec §8.3): no Contract. prefix; modifier chips render on
+                   Writes rows only (no chips = unprotected state-changing entry point). #}
+                <span class="entry-main">
+                  {{ bookmark_toggle('entry', ep.url_id, ('e:' + ep.url_id) in bookmarked_ids) }}
+                  <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
+                    <code class="src">{{ ep.signature_html | safe }}</code>
+                  </a>
+                  {%- for m in ep.modifier_names %}
+                  <span class="entry-mod-chip" title="Guarded by the {{ m }} modifier">{{ m }}</span>
+                  {%- endfor %}
+                </span>
+                <span class="entry-meta">
+                  {%- if ep.url_id in viewed_ids -%}
+                    <span class="meta-reviewed" title="Reviewed (you've opened this Flow)">✓</span>
+                  {%- endif -%}
+                  {%- if ep.unresolved_count > 0 -%}
+                    <span class="meta-unresolved" title="{{ ep.unresolved_count }} call(s) that couldn't be traced in this Flow — shown as red pills">{{ ep.unresolved_count }} unr</span>
+                  {%- endif -%}
+                  <span class="meta-depth" title="max call depth {{ ep.max_depth }}">d{{ ep.max_depth }}</span>
+                </span>
+              </li>
+              {% endfor %}
+            </ul>
+          </section>
+          {% endif %}
+          {% if contract.read_only_entry_points %}
+          <section class="entry-section" data-section="read">
+            <h4 class="section-heading" data-toggle-reads role="button" tabindex="0" aria-expanded="true">
+              {{ chevron(13, 'reads-chevron') }}
+              Reads · {{ contract.read_only_count }}
+            </h4>
+            <ul class="entry-list">
+              {% for ep in contract.read_only_entry_points %}
+              <li class="entry-row{{ ' viewed' if ep.url_id in viewed_ids }}" id="e-{{ ep.url_id | anchor_slug }}" data-kind="read" data-guarded="0" data-fn="{{ ep.function_full_name }}" data-depth="{{ ep.max_depth }}" data-nodes="{{ ep.node_count }}">
+                <span class="entry-caret" aria-hidden="true">▸</span>
+                {# v0.11.0: Reads rows carry no modifier chips (deliberate §8.3
+                   asymmetry) but share the entry-main wrapper. #}
+                <span class="entry-main">
+                  {{ bookmark_toggle('entry', ep.url_id, ('e:' + ep.url_id) in bookmarked_ids) }}
+                  <a class="entry-link" href="{{ url_for('flow_page', url_id=ep.url_id) }}">
+                    <code class="src">{{ ep.signature_html | safe }}</code>
+                  </a>
+                </span>
+                <span class="entry-meta">
+                  {%- if ep.url_id in viewed_ids -%}
+                    <span class="meta-reviewed" title="Reviewed (you've opened this Flow)">✓</span>
+                  {%- endif -%}
+                  {%- if ep.unresolved_count > 0 -%}
+                    <span class="meta-unresolved" title="{{ ep.unresolved_count }} call(s) that couldn't be traced in this Flow — shown as red pills">{{ ep.unresolved_count }} unr</span>
+                  {%- endif -%}
+                  <span class="meta-depth" title="max call depth {{ ep.max_depth }}">d{{ ep.max_depth }}</span>
+                </span>
+              </li>
+              {% endfor %}
+            </ul>
+          </section>
+          {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </section>
+      {% endif %}
+    {% endfor %}
+
+    {# Keyboard hint — revealed by index.js (the keys are JS-only). #}
+    <p class="index-keys" hidden>
+      <span class="keys-label">Keys</span>&nbsp;&nbsp;
+      <span class="key">↑↓ / j k</span> move ·
+      <span class="key">⏎</span> open Flow ·
+      <span class="key">b</span> pin ·
+      <span class="key">/</span> filter ·
+      <span class="key">esc</span> clear
+    </p>
+
+    {# v0.12.0 chips legend (spec §8.3): each key renders through the SAME classes
+       as the live chips so the legend stays self-verifying. #}
+    <p class="index-legend">
+      <span class="scope-chrome">Legend</span>
+      <span class="scope-chrome">·</span>
+      <span class="entry-mod-chip">modifier</span>
+      <span class="scope-chrome">function with a modifier, none = no modifier</span>
+      <span class="scope-chrome">·</span>
+      <span class="meta-unresolved">2 unr</span>
+      <span class="scope-chrome">calls that couldn't be traced</span>
+      <span class="scope-chrome">·</span>
+      <span class="meta-depth">d3</span>
+      <span class="scope-chrome">max call depth</span>
+    </p>
+  </div>
+</div>
 
 <p class="privacy-footer">All analysis local · code never uploaded · server bound to 127.0.0.1 · <a class="source-link" href="https://github.com/norah1499/solidity-flow-navigator">source</a></p>
 {% endblock %}
 
-{# v0.15.0: progressive enhancement — pin toggles work as plain links above;
-   this script intercepts them to toggle in place (no reload), so the auditor's
-   scroll position is preserved (spec §8.3). #}
 {% block scripts %}
   <script src="{{ url_for('static', filename='js/index.js') }}" defer></script>
 {% endblock %}
