@@ -69,6 +69,11 @@
   /* Edges */
   --edge-color: #888888;
 
+  /* Minimap (v0.21.0, spec §10.2): panel bg, node rects, viewport rectangle */
+  --mm-bg: rgba(247, 245, 238, 0.94);
+  --mm-node: #9a978c;
+  --mm-viewport-border: #3a6db0;
+
   /* Pygments token colors (light mode) */
   --tok-keyword: #0c447c;
   --tok-name: #534ab7;
@@ -177,6 +182,10 @@
 
     --edge-color: #6f6f6f;
 
+    --mm-bg: rgba(29, 29, 27, 0.94);
+    --mm-node: #6f6f6f;
+    --mm-viewport-border: #7fb3eb;
+
     --tok-keyword: #7fb3eb;
     --tok-name: #b5b1ff;
     --tok-string: #a8d18c;
@@ -235,6 +244,10 @@
   --node-external-border: #888888;
 
   --edge-color: #6f6f6f;
+
+  --mm-bg: rgba(29, 29, 27, 0.94);
+  --mm-node: #6f6f6f;
+  --mm-viewport-border: #7fb3eb;
 
   --tok-keyword: #7fb3eb;
   --tok-name: #b5b1ff;
@@ -1373,6 +1386,92 @@ body.flow-page .flow-header {
 
 #nodes { position: absolute; top: 0; left: 0; }
 #nodes .node { position: absolute; }
+
+/* ----- minimap (v0.21.0, spec §10.2 "Flow minimap") --------------------- */
+/* Collapsible overview overlay pinned to the lower-right of #graph-frame. It
+   is a SIBLING of #graph, so the d3-zoom transform on #graph never touches it;
+   #graph-frame is position:relative + overflow:hidden, so it floats over the
+   graph clipped to the frame. flow-progressive.js draws node rectangles into
+   the canvas on every relayout and positions the extent + reticle indicators
+   from the live zoom transform. The panel is sized responsively by sizeMinimap()
+   in JS (the width/height below are no-JS fallbacks). The .fold-chevron
+   transition is inherited from the shared rule in the prefers-reduced-motion
+   block above. */
+.minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 5;
+  width: 172px; /* fallback; sizeMinimap() overrides with a window-relative size */
+  background: var(--mm-bg);
+  border: 0.5px solid var(--border-strong);
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+  user-select: none;
+}
+.minimap-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--fg-muted);
+  background: var(--bg-surface);
+  border: 0;
+  border-bottom: 0.5px solid var(--border-soft);
+  cursor: pointer;
+  text-align: left;
+}
+.minimap-toggle:hover { color: var(--fg-text); }
+/* Match the .flow-control button text (Expand all / Reset view) so the header
+   reads as part of the same control family: same size, weight, and ink. */
+.minimap-label {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--fg-text);
+}
+/* chevron points down when open and rotates to point right when collapsed,
+   mirroring the index Bindings card fold. */
+.minimap .fold-chevron { display: inline-flex; color: var(--fg-muted); }
+.minimap .fold-chevron svg { display: block; }
+.minimap[data-collapsed] .fold-chevron { transform: rotate(-90deg); }
+.minimap[data-collapsed] .minimap-toggle { border-bottom: 0; }
+.minimap[data-collapsed] .minimap-body { display: none; }
+
+.minimap-body {
+  position: relative;
+  width: 100%;
+  height: 116px; /* fallback; sizeMinimap() sets the real height inline */
+  cursor: grab;
+}
+.minimap-body:active { cursor: grabbing; }
+#minimap-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Both indicators are visual only — the .minimap-body handles all pointer input. */
+.minimap-extent,
+.minimap-reticle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+/* Faint outline of the true visible region, for orientation only. */
+.minimap-extent {
+  border: 1px solid rgba(127, 127, 127, 0.34);
+}
+/* Fixed-size aim box marking the view centre — the prominent indicator. */
+.minimap-reticle {
+  border: 1.5px solid var(--mm-viewport-border);
+  background: rgba(90, 143, 196, 0.1);
+  border-radius: 2px;
+}
 
 /* v0.16.0: #reset-view moved from a floating button inside #graph-frame into
    the header's .flow-controls group (styled by .flow-control above). This also

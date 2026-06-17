@@ -63,6 +63,28 @@
     </svg>
     <div id="nodes"></div>
   </div>
+  {# v0.21.0 (spec §10.2 "Flow minimap"): collapsible overview overlay. A
+     sibling of #graph (NOT inside it) so the d3-zoom transform applied to
+     #graph never touches it; #graph-frame is position:relative + overflow
+     :hidden, so this floats over the graph clipped to the frame. The canvas
+     draws node rectangles (redrawn by flow-progressive.js on every relayout);
+     the viewport div marks the current view and is the click/drag target that
+     relocates it. JavaScript-rendered, no no-JS fallback — neither has the
+     graph. #}
+  <div id="minimap" class="minimap" aria-label="Mini Map">
+    <button id="minimap-toggle" class="minimap-toggle" type="button" aria-expanded="true" title="Hide Mini Map (shortcut: m)" aria-label="Toggle Mini Map">
+      <span class="fold-chevron"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span class="minimap-label">Mini Map</span>
+    </button>
+    <div class="minimap-body" title="Click or drag to aim — dives into that part of the flow">
+      <canvas id="minimap-canvas"></canvas>
+      {# Two non-interactive indicators (the body handles all pointer input):
+         #minimap-extent is a really-faint outline of the true visible region;
+         #minimap-reticle is the fixed-size aim box marking the view centre. #}
+      <div id="minimap-extent" class="minimap-extent" aria-hidden="true"></div>
+      <div id="minimap-reticle" class="minimap-reticle" aria-hidden="true"></div>
+    </div>
+  </div>
 </div>
 {% endblock %}
 

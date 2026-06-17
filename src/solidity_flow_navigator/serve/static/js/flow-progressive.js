@@ -64,6 +64,13 @@
   const nodesLayer = document.getElementById("nodes");
   const edgesLayer = document.getElementById("edges");
   const resetButton = document.getElementById("reset-view");
+  // v0.21.0 (spec §10.2 "Flow minimap"): collapsible overview overlay.
+  const minimapEl = document.getElementById("minimap");
+  const minimapBody = minimapEl && minimapEl.querySelector(".minimap-body");
+  const minimapCanvas = document.getElementById("minimap-canvas");
+  const minimapExtent = document.getElementById("minimap-extent");
+  const minimapReticle = document.getElementById("minimap-reticle");
+  const minimapToggle = document.getElementById("minimap-toggle");
 
   // ----- ID assignment + index -------------------------------------------
 
@@ -2037,6 +2044,9 @@
     refreshExpandedLineState();
     lastNodeRects = nodeRects; // snapshot for next layout's auto-balance metric
     graph.dataset.state = "ready";
+    // v0.21.0 (spec §10.2): one hook for every relayout path. nodeRects/dx/dy
+    // are the exact final positions (not mid-transition dom.style values).
+    renderMinimap(nodeRects, dx, dy, layoutWidth, layoutHeight);
     return { width: layoutWidth, height: layoutHeight };
   }
 
@@ -2077,6 +2087,7 @@
     .on("zoom", (event) => {
       const t = event.transform;
       graph.style.transform = "translate(" + t.x + "px, " + t.y + "px) scale(" + t.k + ")";
+      updateMinimapIndicators(); // v0.21.0: keep the extent + reticle in sync
     });
 
   const frameSel = d3.select(frame);
@@ -2092,6 +2103,256 @@
       frameSel.transition().duration(220).call(zoom.transform, t);
     } else {
       frameSel.call(zoom.transform, t);
+    }
+  }
+
+  // ----- minimap (spec §10.2 "Flow minimap") ------------------------------
+  //
+  // A navigation launcher, not a viewport mirror. renderMinimap() draws every
+  // visible node as a rectangle, scaled to fit the panel, from the SAME
+  // nodeRects/dx/dy the relayout just computed (exact final positions, unlike
+  // mid-transition dom.style.left). updateMinimapIndicators() draws two markers
+  // from the live d3-zoom transform: a really-faint outline of the true visible
+  // region (#minimap-extent) and a FIXED-size aim box at the view centre
+  // (#minimap-reticle). Aiming the panel recenters there and zooms IN to a
+  // readable level (minimapRelocate), never zooming out. It mirrors the rendered
+  // graph only — a view aid, not a map of the full latent tree — so it never
+  // touches the expansion model or P4. mmScale/mmOffset/mmW/mmH map graph coords
+  // → panel coords. sizeMinimap() makes the panel track the window.
+  let mmScale = 0;
+  let mmOffsetX = 0;
+  let mmOffsetY = 0;
+  let mmW = 0;
+  let mmH = 0;
+  let mmLast = null; // last layout snapshot, so a re-expanded minimap redraws
+  const MINIMAP_KEY = "solflow:minimap-collapsed"; // global UI preference
+  const MM_TARGET_ZOOM = 0.9; // readable level an aim dives into (tunable)
+  const MM_RETICLE_FRAC = 0.12; // reticle side as a fraction of the panel
+  const MM_MIN_W = 146;
+  const MM_MAX_W = 268; // responsive width clamps
+  const MM_MIN_H = 96;
+  const MM_MAX_H = 196; // responsive height clamps
+
+  // Size the panel relative to the graph frame, clamped so it never gets tiny
+  // or eats the canvas. The body height is set inline; the canvas is 100%/100%.
+  function sizeMinimap() {
+    if (!minimapEl || !minimapBody) return;
+    const fr = frame.getBoundingClientRect();
+    if (!fr.width || !fr.height) return;
+    // Match the frame's aspect ratio so the panel's shape tracks the window.
+    // Size from a fraction of the frame width, then keep both dims in range,
+    // re-deriving the other so the aspect holds at the clamp boundaries.
+    const aspect = fr.height / fr.width;
+    let w = Math.max(MM_MIN_W, Math.min(MM_MAX_W, Math.round(fr.width * 0.17)));
+    let h = Math.round(w * aspect);
+    if (h < MM_MIN_H) {
+      h = MM_MIN_H;
+      w = Math.round(h / aspect);
+    } else if (h > MM_MAX_H) {
+      h = MM_MAX_H;
+      w = Math.round(h / aspect);
+    }
+    w = Math.max(MM_MIN_W, Math.min(MM_MAX_W, w));
+    minimapEl.style.width = w + "px";
+    minimapBody.style.height = h + "px";
+  }
+
+  function renderMinimap(nodeRects, dx, dy, layoutW, layoutH) {
+    if (!minimapCanvas) return;
+    mmLast = { nodeRects, dx, dy, layoutW, layoutH };
+    const cssW = minimapCanvas.clientWidth;
+    const cssH = minimapCanvas.clientHeight;
+    if (!cssW || !cssH || !layoutW || !layoutH) {
+      mmScale = 0; // collapsed/hidden — nothing to draw; mmLast redraws on show
+      return;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    minimapCanvas.width = Math.round(cssW * dpr);
+    minimapCanvas.height = Math.round(cssH * dpr);
+    const ctx = minimapCanvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+
+    const pad = 4;
+    mmScale = Math.min((cssW - pad * 2) / layoutW, (cssH - pad * 2) / layoutH);
+    mmOffsetX = (cssW - layoutW * mmScale) / 2;
+    mmOffsetY = (cssH - layoutH * mmScale) / 2;
+    mmW = cssW;
+    mmH = cssH;
+
+    ctx.fillStyle =
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--mm-node")
+        .trim() || "#9a978c";
+    nodeRects.forEach((r) => {
+      const x = (r.left + dx) * mmScale + mmOffsetX;
+      const y = (r.top + dy) * mmScale + mmOffsetY;
+      ctx.fillRect(x, y, Math.max(1, r.w * mmScale), Math.max(1, r.h * mmScale));
+    });
+    updateMinimapIndicators();
+  }
+
+  function renderMinimapFromLast() {
+    if (mmLast) {
+      renderMinimap(mmLast.nodeRects, mmLast.dx, mmLast.dy, mmLast.layoutW, mmLast.layoutH);
+    }
+  }
+
+  function updateMinimapIndicators() {
+    if (!mmScale || !minimapEl || minimapEl.hasAttribute("data-collapsed")) return;
+    const t = d3.zoomTransform(frame);
+    const fr = frame.getBoundingClientRect();
+
+    // Faint extent: the true visible region projected into the panel, clamped.
+    if (minimapExtent) {
+      let left = ((0 - t.x) / t.k) * mmScale + mmOffsetX;
+      let top = ((0 - t.y) / t.k) * mmScale + mmOffsetY;
+      let right = ((fr.width - t.x) / t.k) * mmScale + mmOffsetX;
+      let bottom = ((fr.height - t.y) / t.k) * mmScale + mmOffsetY;
+      left = Math.max(0, Math.min(mmW, left));
+      top = Math.max(0, Math.min(mmH, top));
+      right = Math.max(0, Math.min(mmW, right));
+      bottom = Math.max(0, Math.min(mmH, bottom));
+      minimapExtent.style.left = left + "px";
+      minimapExtent.style.top = top + "px";
+      minimapExtent.style.width = Math.max(0, right - left) + "px";
+      minimapExtent.style.height = Math.max(0, bottom - top) + "px";
+    }
+
+    // Fixed reticle: a constant-size box centred on the current view centre.
+    if (minimapReticle) {
+      const side = Math.max(10, MM_RETICLE_FRAC * Math.min(mmW, mmH));
+      const cx = ((fr.width / 2 - t.x) / t.k) * mmScale + mmOffsetX;
+      const cy = ((fr.height / 2 - t.y) / t.k) * mmScale + mmOffsetY;
+      const left = Math.max(0, Math.min(mmW - side, cx - side / 2));
+      const top = Math.max(0, Math.min(mmH - side, cy - side / 2));
+      minimapReticle.style.left = left + "px";
+      minimapReticle.style.top = top + "px";
+      minimapReticle.style.width = side + "px";
+      minimapReticle.style.height = side + "px";
+    }
+  }
+
+  // Aim: recenter on the graph point under (clientX, clientY) and zoom IN to a
+  // readable level. "Only zoom in" — if the view is already closer than
+  // MM_TARGET_ZOOM, keep that zoom and just pan; never zoom out. Animate a click
+  // (the dive); apply drag moves immediately (live scrub at the dived-in zoom).
+  function minimapRelocate(clientX, clientY, animate) {
+    if (!mmScale) return;
+    const rect = minimapCanvas.getBoundingClientRect();
+    const gx = (clientX - rect.left - mmOffsetX) / mmScale;
+    const gy = (clientY - rect.top - mmOffsetY) / mmScale;
+    const k = Math.min(ZOOM_MAX, Math.max(currentScale(), MM_TARGET_ZOOM));
+    const fr = frame.getBoundingClientRect();
+    const tx = fr.width / 2 - gx * k;
+    const ty = fr.height / 2 - gy * k;
+    const tform = d3.zoomIdentity.translate(tx, ty).scale(k);
+    if (animate) {
+      frameSel.transition().duration(220).call(zoom.transform, tform);
+    } else {
+      frameSel.call(zoom.transform, tform);
+    }
+  }
+
+  function setMinimapCollapsed(collapsed) {
+    if (!minimapEl) return;
+    if (collapsed) minimapEl.setAttribute("data-collapsed", "");
+    else minimapEl.removeAttribute("data-collapsed");
+    if (minimapToggle) {
+      minimapToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      minimapToggle.setAttribute(
+        "title",
+        (collapsed ? "Show" : "Hide") + " Mini Map (shortcut: m)",
+      );
+    }
+    if (!collapsed) {
+      // The body was display:none while collapsed, so the canvas had no size
+      // and nothing was drawn; size + redraw from the last layout now visible.
+      sizeMinimap();
+      renderMinimapFromLast();
+      updateMinimapIndicators();
+    }
+  }
+
+  function toggleMinimap() {
+    if (!minimapEl) return;
+    const next = !minimapEl.hasAttribute("data-collapsed");
+    setMinimapCollapsed(next);
+    try {
+      localStorage.setItem(MINIMAP_KEY, next ? "1" : "0");
+    } catch (_e) {
+      /* storage unavailable — toggle still works for this session */
+    }
+  }
+
+  if (minimapEl && minimapBody && minimapCanvas) {
+    // Keep every zoom/pan gesture that starts on the minimap contained to it:
+    // d3-zoom lives on #graph-frame (an ancestor), so stopping these events from
+    // bubbling means scrolling or pinching over the minimap never zooms the main
+    // graph and a minimap drag never starts a frame pan. d3-zoom binds mouse and
+    // touch (not pointer) events, so mousedown/touch* must be stopped too. The
+    // minimap's own click/drag-to-aim uses pointer events on .minimap-body and is
+    // unaffected. wheel + Safari gesture events are also preventDefault'd (the
+    // panel has no scroll of its own); touch events are only stopped, not
+    // prevented, so they still synthesize the pointer events the aim handler needs.
+    ["mousedown", "pointerdown", "dblclick", "touchstart", "touchmove", "touchend"].forEach(
+      (type) => minimapEl.addEventListener(type, (e) => e.stopPropagation()),
+    );
+    ["wheel", "gesturestart", "gesturechange", "gestureend"].forEach((type) =>
+      minimapEl.addEventListener(
+        type,
+        (e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        },
+        { passive: false },
+      ),
+    );
+
+    let mmDragging = false;
+    minimapBody.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      mmDragging = true;
+      try {
+        minimapBody.setPointerCapture(e.pointerId);
+      } catch (_e) {
+        /* setPointerCapture unsupported — fall back to plain move tracking */
+      }
+      minimapRelocate(e.clientX, e.clientY, true); // animated dive on click
+    });
+    minimapBody.addEventListener("pointermove", (e) => {
+      if (mmDragging) minimapRelocate(e.clientX, e.clientY, false); // live scrub
+    });
+    const endDrag = (e) => {
+      if (!mmDragging) return;
+      mmDragging = false;
+      try {
+        minimapBody.releasePointerCapture(e.pointerId);
+      } catch (_e) {
+        /* nothing captured */
+      }
+    };
+    minimapBody.addEventListener("pointerup", endDrag);
+    minimapBody.addEventListener("pointercancel", endDrag);
+
+    if (minimapToggle) minimapToggle.addEventListener("click", toggleMinimap);
+
+    // Resize: re-size the panel to the window, then redraw rects + indicators
+    // (the graph transform is unchanged, but the panel and visible region change).
+    window.addEventListener("resize", () => {
+      sizeMinimap();
+      renderMinimapFromLast();
+      updateMinimapIndicators();
+    });
+
+    // Size the panel before the first layout pass, then restore the saved
+    // collapsed preference.
+    sizeMinimap();
+    try {
+      if (localStorage.getItem(MINIMAP_KEY) === "1") setMinimapCollapsed(true);
+    } catch (_e) {
+      /* storage unavailable — default to shown */
     }
   }
 
@@ -2182,11 +2443,13 @@
     const isFit = k === "0" || k === "r" || k === "R";
     const isExpand = k === "e" || k === "E";
     const isCollapse = k === "c" || k === "C";
-    if (!isFit && !isExpand && !isCollapse) return;
+    const isMinimap = k === "m" || k === "M"; // v0.21.0: toggle the minimap
+    if (!isFit && !isExpand && !isCollapse && !isMinimap) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-    if (isExpand) expandAll();
+    if (isMinimap) toggleMinimap();
+    else if (isExpand) expandAll();
     else if (isCollapse) collapseAll();
     else applyFit(true);
   });
