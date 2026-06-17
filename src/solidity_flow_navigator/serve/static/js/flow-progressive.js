@@ -71,6 +71,17 @@
   const minimapExtent = document.getElementById("minimap-extent");
   const minimapReticle = document.getElementById("minimap-reticle");
   const minimapToggle = document.getElementById("minimap-toggle");
+  // v0.22.0 (spec §10.2 "Flow call-tree sidebar"): collapsible left navigator.
+  const sidebarEl = document.getElementById("call-tree");
+  const calltreeList = document.getElementById("calltree-list");
+  const calltreeFilter = document.getElementById("calltree-filter");
+  const calltreeFilterClear = document.getElementById("calltree-filter-clear");
+  const calltreeFilterCount = document.getElementById("calltree-filter-count");
+  const calltreeCollapse = document.getElementById("calltree-collapse");
+  const calltreeReopen = document.getElementById("calltree-reopen");
+  const calltreeResize = document.getElementById("calltree-resize");
+  const maximizeToggle = document.getElementById("maximize-toggle");
+  const fullscreenRestore = document.getElementById("fullscreen-restore");
 
   // ----- ID assignment + index -------------------------------------------
 
@@ -108,6 +119,7 @@
   // separate manual upper-left placement (spec §11.6).
   const sideById = new Map(); // id -> "left" | "right"
   let lastNodeRects = new Map(); // module-level snapshot of last layout for auto-balance
+  let ctNodeBoxes = new Map(); // id -> {cx, cy} rendered centre (centred-node highlight)
 
   // ----- DOM rendering ---------------------------------------------------
 
@@ -2046,7 +2058,15 @@
     graph.dataset.state = "ready";
     // v0.21.0 (spec §10.2): one hook for every relayout path. nodeRects/dx/dy
     // are the exact final positions (not mid-transition dom.style values).
+    // v0.22.0: cache each visible node's rendered centre (graph coords) for the
+    // centred-node sidebar highlight — read without forcing DOM reflow.
+    ctNodeBoxes = new Map();
+    nodeRects.forEach((r, id) => {
+      ctNodeBoxes.set(id, { cx: r.x + dx, cy: r.y + dy });
+    });
     renderMinimap(nodeRects, dx, dy, layoutWidth, layoutHeight);
+    buildCallTree(); // v0.22.0: refresh the sidebar from the new visible set
+    updateActiveFromViewport(); // highlight the node now at the viewport centre
     return { width: layoutWidth, height: layoutHeight };
   }
 
@@ -2088,6 +2108,7 @@
       const t = event.transform;
       graph.style.transform = "translate(" + t.x + "px, " + t.y + "px) scale(" + t.k + ")";
       updateMinimapIndicators(); // v0.21.0: keep the extent + reticle in sync
+      updateActiveFromViewport(); // v0.22.0: highlight the centred node in the sidebar
     });
 
   const frameSel = d3.select(frame);
@@ -2356,6 +2377,449 @@
     }
   }
 
+  // ----- call-tree sidebar (spec §10.2 "Flow call-tree sidebar") ----------
+  //
+  // A structural navigator: an indented outline of the OPENED nodes in tree
+  // order. One node is "active" (the last opened, or the last sidebar row
+  // clicked) and highlighted; beneath it its not-yet-opened direct children
+  // render as openable rows that expand in the graph via the same path a
+  // call-site click runs. The filter is scoped to the sidebar's own rows —
+  // opened nodes + the active node's openable children — and never reaches the
+  // project or other entry points (P1). It reflects the rendered graph only and
+  // is rebuilt at the end of every relayout (one hook, like the minimap).
+  let activeId = flow.root.__id;
+  let activePath = new Set(); // ids on the path root → activeId (the active chain)
+  const SIDEBAR_KEY = "solflow:calltree-collapsed"; // global UI preference
+
+  // Split a node's label into a muted "Contract." prefix and the function name.
+  function ctLabelParts(node) {
+    if (node.node_type === "function") {
+      const declarerQualified =
+        node.call_kind === "library" || node.call_kind === "external";
+      const contract = declarerQualified
+        ? node.declarer_contract_name
+        : node.invoked_via_contract_name;
+      return { prefix: contract + ".", name: shortenSignature(node.full_name) };
+    }
+    if (node.node_type === "external") {
+      return {
+        prefix: node.target_contract_name ? node.target_contract_name + "." : "",
+        name: node.target_function_name + "(...)",
+      };
+    }
+    // unresolved: split the descriptor at the contract/method boundary if any.
+    const d = node.descriptor || "unresolved";
+    const head = d.indexOf("(") === -1 ? d : d.slice(0, d.indexOf("("));
+    const dot = head.lastIndexOf(".");
+    if (dot > 0) return { prefix: d.slice(0, dot + 1), name: d.slice(dot + 1) };
+    return { prefix: "", name: d };
+  }
+
+  function computeActivePath() {
+    // activeId plus all its ancestors up to the root.
+    const s = new Set();
+    let w = activeId;
+    while (w !== null && w !== undefined) {
+      s.add(w);
+      w = parentIdOf(w);
+    }
+    return s;
+  }
+
+  function ctSearchText(node) {
+    // Match surface (spec §10.2): function name, contract name, full signature.
+    const parts = [];
+    if (node.node_type === "function") {
+      parts.push(node.name, node.full_name, node.canonical_name,
+        node.invoked_via_contract_name, node.declarer_contract_name);
+    } else if (node.node_type === "external") {
+      parts.push(node.target_function_name, node.target_contract_name,
+        node.target_canonical_name);
+    } else {
+      parts.push(node.descriptor);
+    }
+    return parts.filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function ctTypeClass(node) {
+    if (node.node_type === "unresolved") return "calltree-row--unresolved";
+    if (node.node_type === "external") return "calltree-row--external";
+    if (isModifierNode(node)) return "calltree-row--modifier";
+    return "calltree-row--function";
+  }
+
+  function ctMakeRow(id, node, depth, openable) {
+    const row = el("button", "calltree-row " + ctTypeClass(node));
+    row.type = "button";
+    row.setAttribute("data-id", id);
+    row.setAttribute("data-search", ctSearchText(node));
+    if (openable) row.classList.add("calltree-row--open");
+    else {
+      // Active-path rail + tint, and the selected (viewport-centre) node.
+      if (activePath.has(id)) row.classList.add("is-on-path");
+      if (id === activeId) row.classList.add("is-selected");
+    }
+    // Far-left rail (x=0, before the indent), then the disclosure chevron (⌄ open
+    // / › collapsed) in a fixed gutter indented per depth, then the label.
+    row.appendChild(el("span", "calltree-rail"));
+    // Disclosure chevron only for nodes that have children; a childless (leaf)
+    // node keeps an empty gutter (nothing to disclose) for alignment.
+    const hasChildren =
+      node.node_type === "function" && (node.children || []).length > 0;
+    const glyph = hasChildren ? (openable ? "›" : "⌄") : "";
+    const mark = el("span", "calltree-mark", glyph);
+    mark.style.marginLeft = 6 + depth * 16 + "px";
+    row.appendChild(mark);
+    const parts = ctLabelParts(node);
+    const label = el("span", "calltree-label");
+    if (parts.prefix) label.appendChild(el("span", "ct-prefix", parts.prefix));
+    label.appendChild(el("span", "ct-name", parts.name));
+    row.appendChild(label);
+    return row;
+  }
+
+  function ctRenderInto(frag, id, depth) {
+    // Render opened node `id`, then ALL its direct children in source order:
+    // opened ones nested, not-yet-opened (non-modifier) ones as openable rows.
+    // Showing every opened node's children means opening one child never hides
+    // its siblings.
+    const node = nodesById.get(id);
+    if (!node) return;
+    frag.appendChild(ctMakeRow(id, node, depth, false));
+    if (node.node_type !== "function") return;
+    (node.children || []).forEach((c) => {
+      if (visibleIds.has(c.__id)) {
+        ctRenderInto(frag, c.__id, depth + 1);
+      } else if (!isModifierNode(c)) {
+        frag.appendChild(ctMakeRow(c.__id, c, depth + 1, true));
+      }
+    });
+  }
+
+  function buildCallTree() {
+    if (!calltreeList) return;
+    // If the active node was collapsed away, fall back to its nearest visible
+    // ancestor (or the root).
+    if (!visibleIds.has(activeId)) {
+      let walker = activeId;
+      while (walker && !visibleIds.has(walker)) walker = parentIdOf(walker);
+      activeId = walker || flow.root.__id;
+    }
+    activePath = computeActivePath();
+    const frag = document.createDocumentFragment();
+    ctRenderInto(frag, flow.root.__id, 0);
+    calltreeList.replaceChildren(frag);
+    applyCallTreeFilter();
+  }
+
+  // The visible node whose rendered centre is nearest the viewport centre.
+  function centeredNodeId() {
+    if (!ctNodeBoxes.size) return null;
+    const t = d3.zoomTransform(frame);
+    const fr = frame.getBoundingClientRect();
+    const cx = (fr.width / 2 - t.x) / t.k;
+    const cy = (fr.height / 2 - t.y) / t.k;
+    let best = null;
+    let bestD = Infinity;
+    ctNodeBoxes.forEach((b, id) => {
+      const d = (b.cx - cx) * (b.cx - cx) + (b.cy - cy) * (b.cy - cy);
+      if (d < bestD) {
+        bestD = d;
+        best = id;
+      }
+    });
+    return best;
+  }
+
+  // v0.22.0: the selected node is the one nearest the viewport centre (a scroll-
+  // spy) — not the last opened node. On change, re-light the whole active path.
+  function updateActiveFromViewport() {
+    const id = centeredNodeId();
+    if (!id || id === activeId) return;
+    activeId = id;
+    highlightActivePath();
+  }
+
+  // Re-apply is-on-path / is-selected to every row from the current activeId,
+  // without rebuilding the tree, and scroll the selected row into view.
+  function highlightActivePath() {
+    if (!calltreeList) return;
+    activePath = computeActivePath();
+    let sel = null;
+    calltreeList.querySelectorAll(".calltree-row").forEach((row) => {
+      if (row.classList.contains("calltree-row--open")) {
+        row.classList.remove("is-on-path", "is-selected");
+        return;
+      }
+      const rid = row.getAttribute("data-id");
+      const onPath = activePath.has(rid);
+      row.classList.toggle("is-on-path", onPath);
+      const isSel = onPath && rid === activeId;
+      row.classList.toggle("is-selected", isSel);
+      if (isSel) sel = row;
+    });
+    if (sel) sel.scrollIntoView({ block: "nearest" });
+  }
+
+  function applyCallTreeFilter() {
+    if (!calltreeList) return;
+    const q = (calltreeFilter ? calltreeFilter.value : "").trim().toLowerCase();
+    let shown = 0;
+    let total = 0;
+    calltreeList.querySelectorAll(".calltree-row").forEach((row) => {
+      total += 1;
+      const match = !q || (row.getAttribute("data-search") || "").indexOf(q) !== -1;
+      row.hidden = !match;
+      if (match) shown += 1;
+    });
+    if (calltreeFilterCount) {
+      calltreeFilterCount.textContent = q ? shown + " of " + total : "";
+    }
+  }
+
+  // Pan (and zoom in if needed) the canvas so node `id` is centred — the same
+  // magnify-only-in move the minimap aim uses (spec §10.2 "Flow minimap"). Reads
+  // the node's live DOM position (graph coords), which is correct immediately
+  // after a relayout for a freshly-opened node, unlike the cached node boxes.
+  function centerNodeInView(id) {
+    const dom = domById.get(id);
+    if (!dom) return;
+    // Read the node's real on-screen rect (forces a synchronous reflow, so the
+    // position is final even right after a relayout) and invert the current
+    // transform to recover its graph coordinates — robust whether or not the
+    // freshly-opened node's style.left/top has flushed yet.
+    const t = d3.zoomTransform(frame);
+    const fr = frame.getBoundingClientRect();
+    const b = dom.getBoundingClientRect();
+    const cx = (b.left + b.width / 2 - fr.left - t.x) / t.k;
+    const cy = (b.top + b.height / 2 - fr.top - t.y) / t.k;
+    const k = Math.min(ZOOM_MAX, Math.max(t.k, MM_TARGET_ZOOM));
+    const tx = fr.width / 2 - cx * k;
+    const ty = fr.height / 2 - cy * k;
+    // interrupt() cancels any in-flight zoom transition (e.g. a just-fired
+    // pan-into-view) so the centre move wins.
+    frameSel
+      .interrupt()
+      .transition()
+      .duration(220)
+      .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(k));
+  }
+
+  function ctOpen(id, center) {
+    // Open a not-yet-visible child in the graph, exactly as a call-site click
+    // does (spec §10.2 items 2–5). `center` brings it to the viewport centre (a
+    // row click); otherwise it is just panned into view (a chevron click).
+    if (visibleIds.has(id)) {
+      if (center) centerNodeInView(id);
+      return;
+    }
+    const snapshot = snapshotPositions();
+    expandImplicit(id);
+    refreshExpandedLineState();
+    layoutBox = relayout(snapshot); // relayout's tail rebuilds the sidebar
+    if (center) centerNodeInView(id);
+    else panNewNodesIntoView([id]);
+    persistExpansion();
+  }
+
+  function ctCollapse(id) {
+    // Clicking an opened row collapses it — a toggle mirroring the call-site
+    // click. The root can't be removed, so it collapses its visible (non-
+    // modifier) children instead. Collapse never pans (spec §10.2 item 2).
+    if (!visibleIds.has(id)) return;
+    const snapshot = snapshotPositions();
+    if (id === flow.root.__id) {
+      (nodesById.get(id).children || []).forEach((c) => {
+        if (visibleIds.has(c.__id) && !isModifierNode(c)) collapse(c.__id);
+      });
+    } else {
+      collapse(id);
+    }
+    refreshExpandedLineState();
+    layoutBox = relayout(snapshot); // relayout's tail rebuilds the sidebar
+    persistExpansion();
+  }
+
+  if (calltreeList) {
+    calltreeList.addEventListener("click", (e) => {
+      const row = e.target.closest(".calltree-row");
+      if (!row) return;
+      const id = row.getAttribute("data-id");
+      if (!id) return;
+      const openable = row.classList.contains("calltree-row--open");
+      // The chevron toggles open/collapse (only when it carries a glyph — leaves
+      // have none); a click anywhere else on the row centres the node in the
+      // canvas (opening it first if it is not yet materialised).
+      const mark = row.querySelector(".calltree-mark");
+      const onChevron = !!mark && mark.contains(e.target) && mark.textContent !== "";
+      if (onChevron) {
+        if (openable) ctOpen(id);
+        else ctCollapse(id);
+      } else if (openable) {
+        ctOpen(id, true);
+      } else {
+        centerNodeInView(id);
+      }
+    });
+  }
+  if (calltreeFilter) {
+    calltreeFilter.addEventListener("input", applyCallTreeFilter);
+    calltreeFilter.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (calltreeFilter.value) {
+        calltreeFilter.value = "";
+        applyCallTreeFilter();
+      } else {
+        calltreeFilter.blur();
+      }
+    });
+  }
+  if (calltreeFilterClear && calltreeFilter) {
+    calltreeFilterClear.addEventListener("click", () => {
+      calltreeFilter.value = "";
+      applyCallTreeFilter();
+      calltreeFilter.focus();
+    });
+  }
+
+  const MAXIMIZED_KEY = "solflow:flow-maximized";
+
+  // Show the right floating control for the current state: reopen-sidebar when
+  // the sidebar is collapsed (and not maximized), exit-fullscreen when maximized.
+  function updateFloatTools() {
+    const maxed = document.body.classList.contains("flow-maximized");
+    const collapsed = !!(sidebarEl && sidebarEl.hasAttribute("data-collapsed"));
+    if (calltreeReopen) calltreeReopen.hidden = maxed || !collapsed;
+    if (fullscreenRestore) fullscreenRestore.hidden = !maxed;
+  }
+
+  function setSidebarCollapsed(collapsed) {
+    if (!sidebarEl) return;
+    if (collapsed) sidebarEl.setAttribute("data-collapsed", "");
+    else sidebarEl.removeAttribute("data-collapsed");
+    if (calltreeCollapse) {
+      calltreeCollapse.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    }
+    updateFloatTools();
+    // The graph frame width changed — refresh the minimap (it reads frame size).
+    sizeMinimap();
+    renderMinimapFromLast();
+    updateMinimapIndicators();
+  }
+
+  function toggleSidebar() {
+    if (!sidebarEl) return;
+    const next = !sidebarEl.hasAttribute("data-collapsed");
+    setSidebarCollapsed(next);
+    try {
+      localStorage.setItem(SIDEBAR_KEY, next ? "1" : "0");
+    } catch (_e) {
+      /* storage unavailable — toggle still works for this session */
+    }
+  }
+
+  if (calltreeCollapse) calltreeCollapse.addEventListener("click", toggleSidebar);
+  if (calltreeReopen) calltreeReopen.addEventListener("click", toggleSidebar);
+
+  // v0.22.0: fullscreen — a focus mode that hides all chrome (header bars + the
+  // sidebar) via a class on <body>, keeping the minimap. Because the toolbar's
+  // fullscreen button is hidden while maximized, #fullscreen-restore exits.
+  function setMaximized(on) {
+    document.body.classList.toggle("flow-maximized", on);
+    if (maximizeToggle) {
+      maximizeToggle.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+    updateFloatTools();
+    // The frame width changes either way — keep the (still-visible) minimap synced.
+    sizeMinimap();
+    renderMinimapFromLast();
+    updateMinimapIndicators();
+    try {
+      localStorage.setItem(MAXIMIZED_KEY, on ? "1" : "0");
+    } catch (_e) {
+      /* storage unavailable — focus mode still works for this session */
+    }
+  }
+  function toggleMaximized() {
+    setMaximized(!document.body.classList.contains("flow-maximized"));
+  }
+  if (maximizeToggle) maximizeToggle.addEventListener("click", toggleMaximized);
+  if (fullscreenRestore) fullscreenRestore.addEventListener("click", toggleMaximized);
+  try {
+    if (localStorage.getItem(MAXIMIZED_KEY) === "1") setMaximized(true);
+  } catch (_e) {
+    /* storage unavailable — default to not maximized */
+  }
+
+  // Resizable width (spec §10.2): restore the saved width, then wire the handle.
+  const CALLTREE_WIDTH_KEY = "solflow:calltree-width";
+  const CT_MIN_W = 220;
+  const CT_MAX_W = 560;
+  try {
+    const w = parseInt(localStorage.getItem(CALLTREE_WIDTH_KEY), 10);
+    if (w && sidebarEl) {
+      sidebarEl.style.width = Math.max(CT_MIN_W, Math.min(CT_MAX_W, w)) + "px";
+    }
+  } catch (_e) {
+    /* storage unavailable — keep the default width */
+  }
+  if (calltreeResize && sidebarEl) {
+    let rzDragging = false;
+    let rzStartX = 0;
+    let rzStartW = 0;
+    calltreeResize.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      rzDragging = true;
+      rzStartX = e.clientX;
+      rzStartW = sidebarEl.getBoundingClientRect().width;
+      try {
+        calltreeResize.setPointerCapture(e.pointerId);
+      } catch (_e) {
+        /* unsupported — fall back to plain move tracking */
+      }
+    });
+    calltreeResize.addEventListener("pointermove", (e) => {
+      if (!rzDragging) return;
+      const w = Math.max(CT_MIN_W, Math.min(CT_MAX_W, rzStartW + (e.clientX - rzStartX)));
+      sidebarEl.style.width = w + "px";
+      // The graph frame width changed — keep the minimap in sync.
+      sizeMinimap();
+      renderMinimapFromLast();
+      updateMinimapIndicators();
+    });
+    const rzEnd = (e) => {
+      if (!rzDragging) return;
+      rzDragging = false;
+      try {
+        calltreeResize.releasePointerCapture(e.pointerId);
+      } catch (_e) {
+        /* nothing captured */
+      }
+      try {
+        localStorage.setItem(
+          CALLTREE_WIDTH_KEY,
+          String(Math.round(sidebarEl.getBoundingClientRect().width)),
+        );
+      } catch (_e) {
+        /* storage unavailable — width just won't persist */
+      }
+    };
+    calltreeResize.addEventListener("pointerup", rzEnd);
+    calltreeResize.addEventListener("pointercancel", rzEnd);
+  }
+
+  // The sidebar is open by default (no data-collapsed in the markup, so it stays
+  // open with JS off); collapse it only if the auditor collapsed it on a prior
+  // visit. Done before the first layout pass so the initial fit is correct, and
+  // updateFloatTools() syncs the reopen button to whatever state we land in.
+  try {
+    if (localStorage.getItem(SIDEBAR_KEY) === "1") setSidebarCollapsed(true);
+  } catch (_e) {
+    /* storage unavailable — stay open */
+  }
+  updateFloatTools();
+
   // ----- initial render ---------------------------------------------------
 
   // v0.10.0: --expand-all picks the full-tree initial state; the default
@@ -2444,11 +2908,25 @@
     const isExpand = k === "e" || k === "E";
     const isCollapse = k === "c" || k === "C";
     const isMinimap = k === "m" || k === "M"; // v0.21.0: toggle the minimap
-    if (!isFit && !isExpand && !isCollapse && !isMinimap) return;
+    const isSidebar = k === "t" || k === "T"; // v0.22.0: toggle the call-tree sidebar
+    const isFocusFilter = k === "/"; // v0.22.0: focus the call-tree filter
+    const isEsc = k === "Escape"; // v0.22.0: exit fullscreen
+    if (!isFit && !isExpand && !isCollapse && !isMinimap && !isSidebar && !isFocusFilter && !isEsc) return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const t = e.target;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-    if (isMinimap) toggleMinimap();
+    if (isEsc) {
+      if (document.body.classList.contains("flow-maximized")) setMaximized(false);
+      return;
+    }
+    if (isFocusFilter) {
+      e.preventDefault();
+      if (sidebarEl && sidebarEl.hasAttribute("data-collapsed")) toggleSidebar();
+      if (calltreeFilter) calltreeFilter.focus();
+      return;
+    }
+    if (isSidebar) toggleSidebar();
+    else if (isMinimap) toggleMinimap();
     else if (isExpand) expandAll();
     else if (isCollapse) collapseAll();
     else applyFit(true);

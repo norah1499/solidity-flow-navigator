@@ -37,6 +37,9 @@
   --fg-faint: #8a887f;
   --row-sel: rgba(58, 109, 176, 0.09);
   --mod-soft: var(--node-mod-border);
+  /* v0.22.0 call-tree active-path tints (a low-alpha wash of --mod-soft). */
+  --band: rgba(58, 109, 176, 0.07);
+  --band-sel: rgba(58, 109, 176, 0.16);
   --idx-mod-bg: #e8f0fa;
   --idx-mod-text: #2f5d96;
   --idx-mod-border: #bcd3ee;
@@ -154,6 +157,8 @@
     /* v0.20.0 index redesign tokens — dark mirror (see :root for rationale). */
     --fg-faint: #74736b;
     --row-sel: rgba(127, 179, 235, 0.12);
+  --band: rgba(127, 179, 235, 0.1);
+  --band-sel: rgba(127, 179, 235, 0.2);
     --idx-mod-bg: #1a2433;
     --idx-mod-text: #9fc0ec;
     --idx-mod-border: #33455e;
@@ -223,6 +228,8 @@
      (a bright #e8f0fa chip glaring on the dark canvas). */
   --fg-faint: #74736b;
   --row-sel: rgba(127, 179, 235, 0.12);
+  --band: rgba(127, 179, 235, 0.1);
+  --band-sel: rgba(127, 179, 235, 0.2);
   --idx-mod-bg: #1a2433;
   --idx-mod-text: #9fc0ec;
   --idx-mod-border: #33455e;
@@ -1092,11 +1099,11 @@ body.index-page .site-main {
 /* v0.16.0: scale the flow-header bookmark toggle up to match the header chrome;
    index-row toggles keep their smaller row-sized default. */
 .flow-nav .bookmark-ico {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
 }
 .flow-nav .bookmark-toggle {
-  padding: 0.15rem;
+  padding: 0.2rem;
 }
 
 /* Persistent jump-to-Pinned shortcut — fixed, visible at any scroll position. */
@@ -1249,6 +1256,11 @@ body.index-page .site-main {
   border-radius: 3px;
   padding: 0.4rem 0.75rem;
   display: inline-block;
+  /* v0.22.0: the four header buttons (← Overview / Expand / Collapse / Reset)
+     share one width so the row reads as a uniform set. */
+  box-sizing: border-box;
+  min-width: 7rem;
+  text-align: center;
   cursor: pointer;
 }
 .back-link:hover,
@@ -1257,9 +1269,23 @@ body.index-page .site-main {
   background: var(--fg-text);
   border-color: var(--fg-text);
 }
+/* v0.22.0: icon-only variant (fullscreen) — same chrome as the text buttons but
+   square, so it does not take the 7rem uniform width. */
+.flow-control--icon {
+  min-width: 0;
+  padding: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+.flow-control--icon svg { display: block; }
 
 .flow-header {
-  margin: 0 0 1.5rem;
+  /* v0.22.0: a small gap above the row (half the earlier value) and room in
+     from both page borders. */
+  margin: 0;
+  padding: 0.43rem 1.25rem 0.85rem;
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -1471,6 +1497,282 @@ body.flow-page .flow-header {
   border: 1.5px solid var(--mm-viewport-border);
   background: rgba(90, 143, 196, 0.1);
   border-radius: 2px;
+}
+
+/* ----- call-tree sidebar (v0.22.0, spec §10.2 "Flow call-tree sidebar") --- */
+/* A collapsible left column beside #graph-frame. flow-progressive.js builds
+   #calltree-list from the opened nodes; the filter is scoped to those rows.
+   Reuses the index sidebar's tokens (--node-title-bg active row, --fg-faint
+   tertiary text, the thin scrollbar). .flow-body is the flex row that wraps the
+   sidebar + the graph frame; it carries the min-width:0 escape hatch so dagre's
+   fit still measures the real (sidebar-narrowed) frame width. */
+.flow-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  /* v0.22.0: positioning context for the floating call-tree toggle. */
+  position: relative;
+}
+.flow-sidebar {
+  /* v0.22.0: resizable — JS sets the width; CSS gives the default + bounds. */
+  flex: 0 0 auto;
+  width: 264px;
+  min-width: 220px;
+  max-width: 560px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-surface);
+  border-right: 0.5px solid var(--border-soft);
+  overflow: hidden;
+}
+#call-tree[data-collapsed] { display: none; }
+
+/* Drag handle between the sidebar and the graph; hidden when collapsed. */
+.flow-sidebar-resize {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+}
+.flow-sidebar-resize:hover { background: var(--border-soft); }
+#call-tree[data-collapsed] + .flow-sidebar-resize { display: none; }
+
+/* v0.22.0: contextual floating controls (top-left) — a reopen-sidebar button and
+   a fullscreen-exit button, each shown (via the `hidden` attribute) only in its
+   state. Ghost icon buttons. */
+.flow-float-tools {
+  position: absolute;
+  top: 12px;
+  left: 14px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+/* Match the toolbar fullscreen icon button (.flow-control--icon): same border,
+   radius, square size, and inverted hover — only the floating shadow differs. */
+.float-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--fg-text);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14);
+}
+.float-tool--right {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  z-index: 6;
+}
+.float-tool[hidden] { display: none; }
+.float-tool:hover {
+  color: var(--bg-surface);
+  background: var(--fg-text);
+  border-color: var(--fg-text);
+}
+.float-tool svg { display: block; }
+
+/* Maximized: a near-full-screen focus mode — hide the header bars (and their
+   fullscreen button) and the sidebar, but KEEP the minimap for orientation.
+   #fullscreen-restore (a floating control) is un-hidden by JS to exit. */
+body.flow-maximized .site-header,
+body.flow-maximized .flow-header,
+body.flow-maximized #call-tree,
+body.flow-maximized .flow-sidebar-resize { display: none; }
+
+/* Panel header: a quiet section label (matching the index OVERVIEW / CONTRACTS
+   labels) and a ghost collapse toggle — a title, not a button. */
+.calltree-titlebar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0.5rem 0.45rem 0.6rem;
+}
+.calltree-title {
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  /* "Call Tree" — a plain title in the toolbar buttons' font (≈ Expand all). */
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-text);
+}
+.calltree-title-ico {
+  flex: 0 0 auto;
+  display: block;
+  color: var(--fg-muted);
+}
+.calltree-collapse {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 3px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.calltree-collapse:hover { background: var(--call-hover-bg); }
+.calltree-collapse svg { display: block; }
+
+.calltree-head {
+  flex: 0 0 auto;
+  padding: 0 0.5rem 0.5rem;
+}
+.calltree-search {
+  position: relative;
+}
+.calltree-search-ico {
+  position: absolute;
+  left: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--fg-faint);
+  pointer-events: none;
+}
+.calltree-filter-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-text);
+  background: var(--bg-page);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  padding: 0.35rem 1.5rem 0.35rem 1.7rem;
+  outline: none;
+}
+.calltree-filter-input::placeholder { color: var(--fg-faint); }
+.calltree-filter-input:focus { border-color: var(--border-strong); }
+.calltree-filter-clear {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  right: 0.5rem;
+  width: 1.2rem;
+  height: 1.4rem;
+  line-height: 1.4rem;
+  text-align: center;
+  background: none;
+  border: 0;
+  color: var(--fg-muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+.calltree-filter-clear:hover { color: var(--fg-text); }
+.calltree-filter-count {
+  display: block;
+  margin-top: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.calltree-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.35rem 0.25rem 1rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-soft) transparent;
+}
+.calltree-list::-webkit-scrollbar { width: 6px; }
+.calltree-list::-webkit-scrollbar-track { background: transparent; }
+.calltree-list::-webkit-scrollbar-thumb { background: var(--border-soft); border-radius: 3px; }
+.calltree-list:hover::-webkit-scrollbar-thumb { background: var(--fg-faint); }
+
+.calltree-empty {
+  padding: 0.6rem 0.5rem;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+/* v0.22.0 restyle: full-width band rows with an active-path rail + tint, chevron
+   disclosure icons, and a muted-prefix / emphasised-name split. The rail sits at
+   the far-left gutter (padding-left:0); depth indentation is on the chevron. */
+.calltree-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 5px 8px 5px 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--fg-text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.calltree-row[hidden] { display: none; }
+
+/* Active-path rail: a 3px accent bar at the far-left of every on-path row;
+   transparent off-path. */
+.calltree-rail {
+  flex: 0 0 3px;
+  align-self: stretch;
+  background: transparent;
+}
+.calltree-row.is-on-path .calltree-rail { background: var(--mod-soft); }
+
+/* Path tint fills the rail's gaps so the chain reads as one continuous run; the
+   selected node (viewport centre) is the strongest. Hover only tints off-path
+   rows so the path/selection tints survive a hover. */
+.calltree-row.is-on-path { background: var(--band); }
+.calltree-row.is-selected { background: var(--band-sel); }
+.calltree-row:not(.is-on-path):hover { background: var(--call-hover-bg); }
+
+/* Disclosure chevron carries open/closed state ALONE: ⌄ open (children shown,
+   muted) / › collapsed (click to open, in --fg-text so "there's more inside"
+   reads). Fixed-width centred gutter; depth indent set inline on the chevron. */
+.calltree-mark {
+  flex: 0 0 auto;
+  width: 1.1rem;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--fg-muted);
+}
+.calltree-row--open .calltree-mark { color: var(--fg-text); }
+
+/* Name weighting: muted "Contract." prefix, emphasised function name; the
+   selected row's name is the accent at weight 700. */
+.calltree-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 0.35rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ct-prefix { color: var(--fg-muted); }
+.ct-name {
+  color: var(--fg-text);
+  font-weight: 500;
+}
+.calltree-row.is-selected .ct-name {
+  color: var(--mod-soft);
+  font-weight: 700;
 }
 
 /* v0.16.0: #reset-view moved from a floating button inside #graph-frame into

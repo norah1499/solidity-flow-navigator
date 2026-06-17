@@ -1368,7 +1368,8 @@ def test_flow_progressive_pans_new_nodes_into_view(client: FlaskClient) -> None:
     pans.
 
     pytest cannot run the JS; pin the helper, its wiring in the expand
-    branch (and only there), and the zoom-preserving primitive it uses.
+    branch, the v0.22.0 call-tree sidebar's legitimate reuse of it (a
+    sidebar row reveals its node), and the collapse-never-pans invariant.
     """
     rv = client.get("/static/js/flow-progressive.js")
     js = rv.get_data(as_text=True)
@@ -1380,10 +1381,18 @@ def test_flow_progressive_pans_new_nodes_into_view(client: FlaskClient) -> None:
         "the call-line click handler's EXPAND branch must invoke "
         "panNewNodesIntoView with the freshly expanded ids."
     )
-    assert js.count("panNewNodesIntoView(") == 2, (
-        "panNewNodesIntoView must be invoked exactly once (expand branch) "
-        "— collapse never pans (spec §10.2 item 2)."
-    )
+    # v0.22.0: the call-tree sidebar legitimately pans too (ctOpen reveals a
+    # node when its row's chevron is clicked), so the call is no longer globally
+    # unique. The load-bearing invariant is that the call-line COLLAPSE branch
+    # never pans — check that branch directly.
+    collapse_marker = "expanded.forEach((cid) => collapse(cid));"
+    assert collapse_marker in js
+    collapse_branch = js[
+        js.index(collapse_marker) : js.index("} else {", js.index(collapse_marker))
+    ]
+    assert (
+        "panNewNodesIntoView" not in collapse_branch
+    ), "the call-line collapse branch must never pan (spec §10.2 item 2)."
     assert "zoom.translateBy" in js, (
         "the pan must use zoom.translateBy — translation only, zoom level "
         "untouched (spec §10.2 item 2)."
