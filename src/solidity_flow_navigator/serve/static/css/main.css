@@ -68,6 +68,11 @@
   /* ExternalNode */
   --node-external-bg: #f5f5f3;
   --node-external-border: #888888;
+  /* v0.23.0 Flow-page node boundary rings (§10.2): a warm ring marks the
+     entry-point (root) node, a blue ring the active (viewport-centre) node.
+     Both reuse existing palette hues (the active ring is the modifier blue). */
+  --node-entry-ring: #bb9264;
+  --node-active-ring: #7a9fd0;
 
   /* Edges */
   --edge-color: #888888;
@@ -184,6 +189,8 @@
 
     --node-external-bg: #232321;
     --node-external-border: #888888;
+    --node-entry-ring: #d9b78f;
+    --node-active-ring: #93b4de;
 
     --edge-color: #6f6f6f;
 
@@ -249,6 +256,8 @@
 
   --node-external-bg: #232321;
   --node-external-border: #888888;
+  --node-entry-ring: #d9b78f;
+  --node-active-ring: #93b4de;
 
   --edge-color: #6f6f6f;
 
@@ -314,7 +323,9 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
 
 .site-header {
   display: flex;
-  align-items: baseline;
+  /* v0.23.0: bottom-align so the enlarged `solFlow` wordmark sits on the same
+     bottom line as the repo path and the Auto|Light|Dark control. */
+  align-items: flex-end;
   gap: 1.5rem;
   padding: 1rem 2rem;
   border-bottom: 0.5px solid var(--border-soft);
@@ -322,10 +333,18 @@ html:not(:has(body.flow-page)) { scrollbar-gutter: stable; }
 }
 
 .site-title {
-  font-weight: 500;
-  font-size: 14px;
+  /* v0.23.0: `solFlow` wordmark — mono, blue `Flow`, `sol` in ink. Colour
+     reuses an existing palette shade (the modifier blue). */
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 20.5px;
+  line-height: 1;
   text-decoration: none;
   color: var(--fg-text);
+  white-space: nowrap;
+}
+.site-title-flow {
+  color: var(--node-mod-border);
 }
 
 .site-repo {
@@ -1813,6 +1832,25 @@ body.flow-maximized .flow-sidebar-resize { display: none; }
   border-color: var(--node-external-border);
   background: var(--node-external-bg);
   border-style: dashed;
+}
+
+/* v0.23.0 (§10.2): subtle boundary rings so the two reference points stand out
+   without shouting. `.node--entry` is the root/entry-point node (warm ring);
+   `.node--active` is the node currently nearest the viewport centre (the call-
+   tree scroll-spy, blue ring). Placed AFTER the node-type rules so the ring
+   border-color wins by source order. The ring is a box-shadow (outside the
+   border box), so it adds no layout width and leaves dagre measurements and
+   per-line edge anchoring untouched. */
+.node--entry {
+  border-color: var(--node-entry-ring);
+  box-shadow: 0 0 0 1.5px var(--node-entry-ring);
+}
+.node--active {
+  /* Dashed ring drawn as an outline — outside the box model, so it adds no
+     layout width (dagre measurements untouched) and, unlike box-shadow, can be
+     dashed. */
+  outline: 2.25px dashed var(--node-active-ring);
+  outline-offset: 1.5px;
 }
 
 .node-head {

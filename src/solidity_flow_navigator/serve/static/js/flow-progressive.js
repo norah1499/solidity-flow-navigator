@@ -819,6 +819,10 @@
     domById.set(id, dom);
     visibleIds.add(id);
     assignSide(id);
+    // v0.23.0 (§10.2): the root/entry-point node carries a persistent warm
+    // boundary ring. The active node's blue ring is applied separately by
+    // applyGraphActiveRing() (it tracks the call-tree selection).
+    if (id === flow.root.__id) dom.classList.add("node--entry");
   }
 
   function expandImplicit(id) {
@@ -2496,6 +2500,17 @@
     });
   }
 
+  // v0.23.0 (§10.2): mirror the call-tree's active selection onto the graph as a
+  // subtle blue ring. The root keeps its warm entry ring, so the active ring is
+  // applied only to a non-root active node. Iterates the visible nodes — cheap
+  // for the bounded count a Flow renders.
+  function applyGraphActiveRing() {
+    const want = activeId !== flow.root.__id ? activeId : null;
+    domById.forEach((dom, id) => {
+      dom.classList.toggle("node--active", id === want);
+    });
+  }
+
   function buildCallTree() {
     if (!calltreeList) return;
     // If the active node was collapsed away, fall back to its nearest visible
@@ -2506,6 +2521,7 @@
       activeId = walker || flow.root.__id;
     }
     activePath = computeActivePath();
+    applyGraphActiveRing();
     const frag = document.createDocumentFragment();
     ctRenderInto(frag, flow.root.__id, 0);
     calltreeList.replaceChildren(frag);
@@ -2537,6 +2553,7 @@
     const id = centeredNodeId();
     if (!id || id === activeId) return;
     activeId = id;
+    applyGraphActiveRing();
     highlightActivePath();
   }
 

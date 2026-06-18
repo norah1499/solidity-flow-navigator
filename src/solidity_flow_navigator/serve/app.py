@@ -662,24 +662,26 @@ def create_app(
         # few aggregates over the current listing. The reviewed counts are
         # request-dependent (they intersect the viewed cookie), so they are
         # computed here rather than in the request-independent build_index; the
-        # facet counts are derived in the same single walk. ``Unguarded`` is a
-        # mutating entry with no modifiers, ``Guarded`` one with at least one
-        # (§8.3); both are mutating-only — Reads are neither.
+        # facet counts are derived in the same single walk. The modifier facets
+        # (labelled ``No modifiers`` / ``With modifiers`` in the UI, internal
+        # keys ``unguarded`` / ``guarded``) are mutating-only — a Read is
+        # neither — so ``Writes = No modifiers + With modifiers`` holds.
+        # ``Unresolved`` spans both sections — a Read can have unresolved
+        # descendants too — and counts entries with at least one (§8.3).
         reviewed_by_contract: dict[str, int] = {}
         total_reviewed = 0
         facet_writes = facet_reads = facet_unguarded = facet_guarded = 0
+        facet_unresolved = 0
         for _group in groups:
             for _contract in _group.contracts:
-                reviewed = sum(
-                    1
-                    for ep in (
-                        *_contract.mutating_entry_points,
-                        *_contract.read_only_entry_points,
-                    )
-                    if ep.url_id in viewed_ids
+                all_eps = (
+                    *_contract.mutating_entry_points,
+                    *_contract.read_only_entry_points,
                 )
+                reviewed = sum(1 for ep in all_eps if ep.url_id in viewed_ids)
                 reviewed_by_contract[_contract.name] = reviewed
                 total_reviewed += reviewed
+                facet_unresolved += sum(1 for ep in all_eps if ep.unresolved_count > 0)
                 for ep in _contract.mutating_entry_points:
                     facet_writes += 1
                     if ep.modifier_names:
@@ -693,6 +695,7 @@ def create_app(
             "reads": facet_reads,
             "unguarded": facet_unguarded,
             "guarded": facet_guarded,
+            "unresolved": facet_unresolved,
         }
         # v0.18.0 (§8.3, §13.2): the Bindings panel rows. Candidates and call-
         # site counts are fixed; the current binding set is read live so the

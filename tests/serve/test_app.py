@@ -434,10 +434,10 @@ def test_index_route_passes_scope_and_total_unresolved(
 def test_index_overview_block_renders_summary(client: FlaskClient) -> None:
     """v0.20.0 redesign (spec §8.3): the three-count header is replaced by a
     sidebar Overview block — ``N contracts · M entry points`` and a
-    ``R/M reviewed`` line. The global red ``untraced`` trust-budget count is
-    intentionally dropped: the redesign reframes unresolved as a neutral
-    per-contract fact in the navigator (never a risk/priority cue), so a global
-    red figure would contradict that stance.
+    ``R/M visited`` line (relabelled from ``reviewed`` in v0.23.0). The global
+    red ``untraced`` trust-budget count is intentionally dropped: the redesign
+    reframes unresolved as a neutral per-contract fact in the navigator (never a
+    risk/priority cue), so a global red figure would contradict that stance.
     """
     rv = client.get("/")
     assert rv.status_code == 200
@@ -445,10 +445,38 @@ def test_index_overview_block_renders_summary(client: FlaskClient) -> None:
     assert 'class="index-overview"' in body
     text = re.sub(r"<[^>]+>", "", body)
     assert "contract" in text and "entry point" in text
-    assert "reviewed" in text
+    assert "visited" in text
     # The old three-count header (and its global untraced count) is gone.
     assert 'class="index-header"' not in body
     assert ">untraced<" not in body
+
+
+def test_index_facet_bar_pills(client: FlaskClient) -> None:
+    """v0.23.0 (spec §8.3): the kind-filter bar carries six pills —
+    ``All · Writes · Reads · No modifiers · With modifiers · Unresolved``.
+    ``Unresolved`` is new (its backing data, ``Flow.unresolved_count``, already
+    existed); the modifier pills are relabelled from ``Unguarded``/``Guarded``
+    while keeping the internal ``data-facet`` values stable. (``Payable`` was
+    trialled in v0.23.0 development and dropped before release.)
+    """
+    body = client.get("/").get_data(as_text=True)
+    # New facet machine value is wired; the dropped Payable one is absent.
+    assert 'data-facet="unresolved"' in body
+    assert 'data-facet="payable"' not in body
+    # New / relabelled display text is present; the old modifier labels are gone.
+    for label in ("No modifiers", "With modifiers", "Unresolved"):
+        assert f">{label} <b>" in body, f"facet pill {label!r} missing"
+    assert ">Payable <b>" not in body
+    assert ">Unguarded <b>" not in body and ">Guarded <b>" not in body
+    # Internal modifier facet values are preserved despite the relabel.
+    assert 'data-facet="unguarded"' in body and 'data-facet="guarded"' in body
+    # Requested tooltips on the relevant pills.
+    assert 'title="storage write detected in this flow."' in body
+    assert (
+        'title="function has no Solidity modifiers. Inline checks may still exist."'
+        in body
+    )
+    assert 'title="call target could not be resolved statically."' in body
 
 
 def test_index_drops_repo_path_subtitle_and_contract_prefix(
@@ -1498,13 +1526,20 @@ def test_flow_page_back_link_inside_header_row(
 def test_site_header_brand_is_solflow_title_tag_keeps_full_name(
     client: FlaskClient,
 ) -> None:
-    """v0.10.4 branding: the site-header brand anchor reads 'solflow' (the
-    CLI name); browser <title> tags keep 'Solidity Flow Navigator'
-    (header-only branding decision)."""
+    """v0.10.4 branding: the site-header brand anchor is the CLI name; browser
+    <title> tags keep 'Solidity Flow Navigator' (header-only branding decision).
+    v0.23.0 renders the brand as the `solFlow` wordmark (`Flow` in its own span
+    for blue coloring); the CLI name and the <title> are unchanged."""
     body = client.get("/").get_data(as_text=True)
-    assert re.search(r'<a class="site-title"[^>]*>solflow</a>', body), (
-        "site-header brand must read 'solflow' (v0.10.4 header-only " "branding)."
-    )
+    m = re.search(r'<a class="site-title"[^>]*>(.*?)</a>', body, re.S)
+    assert m, "site-header brand anchor (class=site-title) must be present."
+    brand_text = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+    assert (
+        "solFlow" in brand_text
+    ), "site-header brand must render the 'solFlow' wordmark (v0.23.0)."
+    assert (
+        'class="site-title-flow">Flow</span>' in body
+    ), "the 'Flow' half of the wordmark must be in its own span for coloring."
     assert "<title>Overview — Solidity Flow Navigator</title>" in body, (
         "browser <title> must keep the full project name — the brand "
         "change is header-only."

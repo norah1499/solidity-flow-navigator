@@ -136,7 +136,9 @@
     var kind = row.getAttribute("data-kind");
     if (f === "write") return kind === "write";
     if (f === "read") return kind === "read";
-    // Unguarded / Guarded are mutating-only: a Read is neither.
+    // Unresolved spans both Writes and Reads.
+    if (f === "unresolved") return row.getAttribute("data-unresolved") === "1";
+    // No modifiers / With modifiers are mutating-only: a Read is neither.
     if (f === "unguarded") {
       return kind === "write" && row.getAttribute("data-guarded") === "0";
     }

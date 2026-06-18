@@ -34,9 +34,9 @@
       <p class="index-overview-line">
         <b>{{ total_contracts }}</b> contract{{ 's' if total_contracts != 1 }}
         <span class="ov-sep">·</span>
-        <b>{{ total_entry_points }}</b> entry point{{ 's' if total_entry_points != 1 }}
+        <b>{{ total_entry_points }}</b> <span title="externally reachable public/external function">entry point{{ 's' if total_entry_points != 1 }}</span>
       </p>
-      <p class="index-overview-line"><b>{{ total_reviewed }}</b>/{{ total_entry_points }} reviewed</p>
+      <p class="index-overview-line"><b>{{ total_reviewed }}</b>/{{ total_entry_points }} visited</p>
     </div>
 
     {# --- Bindings panel (foldable card) — spec §8.3, §13.2. One row per bindable
@@ -47,11 +47,11 @@
        and collapses a long list. Renders only when an interface is bindable;
        otherwise the scope line stands alone in the sidebar (below). #}
     {% if bindable %}
-    <section class="index-bindings" id="bindings" data-open aria-label="Interface bindings">
+    <section class="index-bindings" id="bindings" data-open aria-label="Interface Bindings">
       <div class="index-bindings-head" role="button" tabindex="0" aria-expanded="true" aria-controls="bindings-body">
         {{ chevron(18, 'fold-chevron') }}
         <span class="bindings-glyph" aria-hidden="true">⇄</span>
-        <h2 class="bindings-title">Bindings</h2>
+        <h2 class="bindings-title">Interface Bindings</h2>
         <span class="bindings-collapsed-summary">{{ bindable | length }} interface{{ 's' if bindable | length != 1 }} · {{ bindable | selectattr('bound_to') | list | length }} bound</span>
       </div>
       <div class="index-bindings-body" id="bindings-body">
@@ -112,7 +112,7 @@
           <span class="nav-count">{{ count }}</span>
         </span>
         <span class="nav-path">{{ contract.source_path }}</span>
-        <span class="nav-stat">{{ reviewed_by_contract[contract.name] }}/{{ count }} reviewed · {{ contract.unresolved_total }} unresolved</span>
+        <span class="nav-stat">{{ reviewed_by_contract[contract.name] }}/{{ count }} visited · {{ contract.unresolved_total }} unresolved</span>
       </a>
       {% endfor %}
       {% endif %}{% endfor %}
@@ -128,13 +128,15 @@
       <div class="facet-row" id="facet-row" hidden aria-label="Filter by kind">
         <button class="facet is-active" type="button" data-facet="all">All <b>{{ facets.all }}</b></button>
         <span class="facet-sep">·</span>
-        <button class="facet" type="button" data-facet="write">Writes <b>{{ facets.writes }}</b></button>
+        <button class="facet" type="button" data-facet="write" title="storage write detected in this flow.">Writes <b>{{ facets.writes }}</b></button>
         <span class="facet-sep">·</span>
         <button class="facet" type="button" data-facet="read">Reads <b>{{ facets.reads }}</b></button>
         <span class="facet-sep">·</span>
-        <button class="facet" type="button" data-facet="unguarded">Unguarded <b>{{ facets.unguarded }}</b></button>
+        <button class="facet" type="button" data-facet="unguarded" title="function has no Solidity modifiers. Inline checks may still exist.">No modifiers <b>{{ facets.unguarded }}</b></button>
         <span class="facet-sep">·</span>
-        <button class="facet" type="button" data-facet="guarded">Guarded <b>{{ facets.guarded }}</b></button>
+        <button class="facet" type="button" data-facet="guarded">With modifiers <b>{{ facets.guarded }}</b></button>
+        <span class="facet-sep">·</span>
+        <button class="facet" type="button" data-facet="unresolved" title="call target could not be resolved statically.">Unresolved <b>{{ facets.unresolved }}</b></button>
       </div>
       <div class="filter-sort-row">
         <div class="index-filter" hidden>
@@ -208,7 +210,7 @@
             <h4 class="section-heading">Writes · {{ contract.mutating_count }}</h4>
             <ul class="entry-list">
               {% for ep in contract.mutating_entry_points %}
-              <li class="entry-row{{ ' viewed' if ep.url_id in viewed_ids }}" id="e-{{ ep.url_id | anchor_slug }}" data-kind="write" data-guarded="{{ '1' if ep.modifier_names else '0' }}" data-fn="{{ ep.function_full_name }}" data-depth="{{ ep.max_depth }}" data-nodes="{{ ep.node_count }}">
+              <li class="entry-row{{ ' viewed' if ep.url_id in viewed_ids }}" id="e-{{ ep.url_id | anchor_slug }}" data-kind="write" data-guarded="{{ '1' if ep.modifier_names else '0' }}" data-unresolved="{{ '1' if ep.unresolved_count > 0 else '0' }}" data-fn="{{ ep.function_full_name }}" data-depth="{{ ep.max_depth }}" data-nodes="{{ ep.node_count }}">
                 <span class="entry-caret" aria-hidden="true">▸</span>
                 {# v0.11.0 (spec §8.3): no Contract. prefix; modifier chips render on
                    Writes rows only (no chips = unprotected state-changing entry point). #}
@@ -223,7 +225,7 @@
                 </span>
                 <span class="entry-meta">
                   {%- if ep.url_id in viewed_ids -%}
-                    <span class="meta-reviewed" title="Reviewed (you've opened this Flow)">✓</span>
+                    <span class="meta-reviewed" title="Visited — opened locally, not marked reviewed.">✓</span>
                   {%- endif -%}
                   {%- if ep.unresolved_count > 0 -%}
                     <span class="meta-unresolved" title="{{ ep.unresolved_count }} call(s) that couldn't be traced in this Flow — shown as red pills">{{ ep.unresolved_count }} unr</span>
@@ -243,7 +245,7 @@
             </h4>
             <ul class="entry-list">
               {% for ep in contract.read_only_entry_points %}
-              <li class="entry-row{{ ' viewed' if ep.url_id in viewed_ids }}" id="e-{{ ep.url_id | anchor_slug }}" data-kind="read" data-guarded="0" data-fn="{{ ep.function_full_name }}" data-depth="{{ ep.max_depth }}" data-nodes="{{ ep.node_count }}">
+              <li class="entry-row{{ ' viewed' if ep.url_id in viewed_ids }}" id="e-{{ ep.url_id | anchor_slug }}" data-kind="read" data-guarded="0" data-unresolved="{{ '1' if ep.unresolved_count > 0 else '0' }}" data-fn="{{ ep.function_full_name }}" data-depth="{{ ep.max_depth }}" data-nodes="{{ ep.node_count }}">
                 <span class="entry-caret" aria-hidden="true">▸</span>
                 {# v0.11.0: Reads rows carry no modifier chips (deliberate §8.3
                    asymmetry) but share the entry-main wrapper. #}
@@ -255,7 +257,7 @@
                 </span>
                 <span class="entry-meta">
                   {%- if ep.url_id in viewed_ids -%}
-                    <span class="meta-reviewed" title="Reviewed (you've opened this Flow)">✓</span>
+                    <span class="meta-reviewed" title="Visited — opened locally, not marked reviewed.">✓</span>
                   {%- endif -%}
                   {%- if ep.unresolved_count > 0 -%}
                     <span class="meta-unresolved" title="{{ ep.unresolved_count }} call(s) that couldn't be traced in this Flow — shown as red pills">{{ ep.unresolved_count }} unr</span>
