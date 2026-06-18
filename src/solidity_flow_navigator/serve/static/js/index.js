@@ -402,20 +402,15 @@
 
   // ===== per-contract + Reads collapse ===================================
   function initCollapse() {
-    document.querySelectorAll("[data-toggle-contract]").forEach(function (h) {
-      h.addEventListener("click", function (e) {
-        // Let the pin toggle and any link inside the header do their own thing.
-        if (e.target.closest(".bookmark-toggle, a")) return;
-        var block = h.closest(".contract-block");
+    document.querySelectorAll("[data-toggle-contract]").forEach(function (btn) {
+      // v0.24.0: the toggle is a native <button> (the chevron) sitting beside the
+      // pin link, not wrapping it — so no nested-interactive markup, and no
+      // keydown synthesis (a real button handles Enter/Space itself; synthesising
+      // a click here would double-fire and cancel the toggle).
+      btn.addEventListener("click", function () {
+        var block = btn.closest(".contract-block");
         var collapsed = block.toggleAttribute("data-collapsed");
-        h.setAttribute("aria-expanded", collapsed ? "false" : "true");
-      });
-      h.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === " ") {
-          if (e.target.closest(".bookmark-toggle, a")) return;
-          e.preventDefault();
-          h.click();
-        }
+        btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
       });
     });
     document.querySelectorAll("[data-toggle-reads]").forEach(function (h) {

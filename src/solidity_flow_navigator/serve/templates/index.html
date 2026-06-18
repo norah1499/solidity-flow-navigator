@@ -101,14 +101,22 @@
        index.js makes each row a smooth-scroll jump to #c-<slug>, highlights the
        contract currently in view (scroll-spy), and dims rows filtered out. #}
     <nav class="index-nav" aria-label="Contracts">
-      <p class="index-overview-label">Contracts · {{ total_contracts }}</p>
+      {# v0.24.0: a real, sticky section header (was a tiny uppercase eyebrow) —
+         icon + right-aligned count, matching the Interface Bindings heading
+         weight, so the navigator reads as the sidebar's primary scroll region.
+         The list glyph is the same one the Flow Call-Tree sidebar uses. #}
+      <h2 class="nav-title">
+        <span class="nav-glyph" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg></span>
+        Contracts
+        <span class="nav-count-total">{{ total_contracts }}</span>
+      </h2>
       {% for group in groups %}{% if group.contracts %}
       <p class="index-nav-group">{{ group.label }}</p>
       {% for contract in group.contracts %}
       {% set count = contract.mutating_count + contract.read_only_count %}
       <a class="nav-row" href="#c-{{ contract.name | anchor_slug }}" data-nav="{{ contract.name }}">
         <span class="nav-row-top">
-          <span class="nav-name">{{ contract.name }}</span>
+          <span class="nav-name" title="{{ contract.name }}">{{ contract.name }}</span>
           <span class="nav-count">{{ count }}</span>
         </span>
         <span class="nav-path">{{ contract.source_path }}</span>
@@ -197,8 +205,10 @@
         {% for contract in group.contracts %}
         {% set count = contract.mutating_count + contract.read_only_count %}
         <article class="contract-block" id="c-{{ contract.name | anchor_slug }}" data-name="{{ contract.name }}" data-nodes="{{ contract.node_count }}">
-          <h3 class="contract-name" data-toggle-contract role="button" tabindex="0" aria-expanded="true">
-            {{ chevron(16, 'collapse-chevron') }}
+          <h3 class="contract-name">
+            <button class="collapse-toggle" type="button" data-toggle-contract aria-expanded="true" aria-label="Toggle entry points for {{ contract.name }}">
+              {{ chevron(16, 'collapse-chevron') }}
+            </button>
             {{ bookmark_toggle('contract', contract.name, ('c:' + contract.name) in bookmarked_ids) }}
             <span class="contract-name-text">{{ contract.name }}</span>
             <span class="contract-path">{{ contract.source_path }}</span>
