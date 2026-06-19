@@ -31,9 +31,9 @@ SEQ = [
     ("03_term_run.png", 2600),
     # light walkthrough (kept)
     ("04_index_light.png", 2000),
-    ("05_liquidate_root_light.png", 1900),
-    ("07_liquidate_expanded_light.png", 2200),
-    ("08_liquidate_full_light.png", 2300),
+    ("05_swap_root_light.png", 1900),
+    ("07_swap_expanded_light.png", 2200),
+    ("08_swap_full_light.png", 2300),
     # "select dark mode" beat: full light index -> zoom toward toggle -> Dark
     ("04_index_light.png", 1400),
     (("ZOOM", "04_index_light.png", 0.5), 650),
@@ -41,8 +41,8 @@ SEQ = [
     (("ZOOM", "10_index_dark.png", 1.0), 1700),
     # dark trio (kept)
     ("10_index_dark.png", 1900),
-    ("11_liquidate_expanded_dark.png", 2200),
-    ("12_liquidate_full_dark.png", 5000),  # long final hold = clear ending
+    ("11_swap_expanded_dark.png", 2200),
+    ("12_swap_full_dark.png", 5000),  # long final hold = clear ending
 ]
 
 

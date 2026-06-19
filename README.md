@@ -9,9 +9,9 @@
 
 SolFlow compiles a Solidity repository, extracts call-graph facts with [Slither](https://github.com/crytic/slither), and serves one interactive call-flow visualization (a **Flow**) per external entry point. Every node renders the target function's real source, syntax-highlighted and line-numbered. Analysis runs entirely on your machine. Built for Web3 security auditing.
 
-![SolFlow on Morpho Blue: launching solflow from the terminal, the entry-point index, expanding the liquidate flow into its full call tree, then switching to dark mode](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/demo.gif)
+![SolFlow on Uniswap V4: launching solflow from the terminal, the entry-point index, expanding the swap flow into its call tree, then switching to dark mode](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/demo.gif)
 
-*SolFlow on [Morpho Blue](https://github.com/morpho-org/morpho-blue): launch from the terminal, browse the entry-point index, expand the `liquidate` flow into its full call tree, then flip to dark mode. Pausable stills are under [Screenshots](#screenshots).*
+*SolFlow on [Uniswap V4](https://github.com/Uniswap/v4-core): launch from the terminal, browse the entry-point index, expand the `swap` flow into its call tree, then flip to dark mode. Pausable stills are under [Screenshots](#screenshots).*
 
 > [!NOTE]
 > SolFlow is **not a vulnerability scanner**. It emits no findings and makes no security claims. It shows you the code's shape so you can find the problems faster.
@@ -126,17 +126,17 @@ If the project builds cleanly and Slither itself still fails on it (this happens
 ## Screenshots
 
 <details>
-<summary>Stills from the demo above (Morpho Blue)</summary>
+<summary>Stills from the demo above (Uniswap V4)</summary>
 
 The index lists every external entry point of the analyzed repository:
 
-![Index view listing the entry points of Morpho Blue](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/index-morpho.png)
+![Index view listing the entry points of Uniswap V4](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/index-uniswap-v4.png)
 
-Opening an entry point renders its full call flow; every callee panel shows the real source:
+Opening an entry point renders its call flow; every callee panel shows the real source:
 
-![Expanded call-flow graph of Morpho.liquidate](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/flow-liquidate-overview.png)
+![Expanded call-flow graph of PoolManager.swap](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/flow-swap-overview.png)
 
-![Zoomed view of the liquidate flow with library functions](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/flow-liquidate-detail.png)
+![Zoomed into the swap root node: real, syntax-highlighted source with inline type definitions](https://raw.githubusercontent.com/norah1499/solidity-flow-navigator/main/docs/flow-swap-detail.png)
 
 </details>
 

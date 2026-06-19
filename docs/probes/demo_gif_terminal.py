@@ -65,9 +65,9 @@ def main() -> None:
         b = p.chromium.launch()
         page = b.new_context(viewport=VIEW, device_scale_factor=DSF).new_page()
         for name, cmd, cur, ban in [
-            ("01_term_typing.png", "solflow ../test-repos/mor", True, False),
-            ("02_term_full.png", "solflow ../test-repos/morpho-blue", True, False),
-            ("03_term_run.png", "solflow ../test-repos/morpho-blue", False, True),
+            ("01_term_typing.png", "solflow ../test-repos/v4-", True, False),
+            ("02_term_full.png", "solflow ../test-repos/v4-core", True, False),
+            ("03_term_run.png", "solflow ../test-repos/v4-core", False, True),
         ]:
             page.set_content(html(cmd, cursor=cur, banner=ban))
             page.screenshot(path=str(OUT / name))

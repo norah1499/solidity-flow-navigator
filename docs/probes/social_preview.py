@@ -1,7 +1,7 @@
 """Build the 1280x640 GitHub social-preview card (docs/social-preview.png).
 
 Light + minimal: the SolFlow wordmark and tagline on clean cream, over a
-zoomed-in, faded crop of the syntax-highlighted Morpho.liquidate source.
+zoomed-in, faded crop of the syntax-highlighted PoolManager.swap source.
 Reproduces the committed docs/social-preview.png. The card is uploaded manually
 in the repo Settings -> Social preview; it is not referenced by the README.
 
@@ -46,7 +46,7 @@ def font(paths: list[str], size: int) -> ImageFont.FreeTypeFont:
 
 
 def main() -> None:
-    src = Image.open(FRAMES / "05_liquidate_root_light.png").convert("RGB")
+    src = Image.open(FRAMES / "05_swap_root_light.png").convert("RGB")
     crop = src.crop((620, 230, 2860, 1350)).resize((W, H), Image.LANCZOS)
     card = crop.convert("RGBA")
 

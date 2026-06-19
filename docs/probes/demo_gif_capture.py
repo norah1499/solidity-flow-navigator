@@ -4,9 +4,13 @@ Run with the ARCHIVE venv python (has Playwright + Chromium); writes PNGs to
 /tmp/solflow_gif/frames/ (scratch):
   .../solidity-flow-navigator-private-archive/.venv/bin/python docs/probes/demo_gif_capture.py
 
-Servers expected up beforehand (project venv):
+One server expected up beforehand (project venv):
   S1 = http://127.0.0.1:8137  (normal progressive)
-  S2 = http://127.0.0.1:8138  (--expand-all)
+
+The demo subject is Uniswap V4's PoolManager.swap. Its --expand-all tree is
+~9645x133771 px (see flow-progressive.js fit notes), which fits only as an
+unreadable sliver, so the "overview" beat shows a deep but bounded expansion
+(expand_swap_overview) instead of the whole tree.
 """
 
 from __future__ import annotations
@@ -19,54 +23,55 @@ OUT = pathlib.Path("/tmp/solflow_gif/frames")
 OUT.mkdir(parents=True, exist_ok=True)
 
 S1 = "http://127.0.0.1:8137"
-S2 = "http://127.0.0.1:8138"
-LIQ = "/flow/Morpho.liquidate(MarketParams,address,uint256,uint256,bytes)"
+SWAP = "/flow/PoolManager.swap(PoolKey,SwapParams,bytes)"
 
 VIEW = {"width": 1748, "height": 1116}
 DSF = 2
 
 
+PROMPT = (
+    '<span class="prompt">norah@mac</span> '
+    '<span class="path">~/work</span> <span class="sig">%</span>'
+)
+
+
 def terminal_html(command: str, *, cursor: bool, banner: bool) -> str:
-    """A polished macOS-style terminal window rendered for screenshotting."""
+    """A clean macOS-style terminal in the tool's LIGHT palette (cream surface,
+    dark ink, blue/green accents), so the intro flows seamlessly into the light
+    index and the loop-back from the dark finale reads as a clear restart.
+    Single source line + white-space:pre keeps the prompt on one line."""
     cur = '<span class="cur">&#9611;</span>' if cursor else ""
+    cmd_line = (
+        f'<div class="line">{PROMPT}<span class="cmd"> {command}</span>{cur}</div>'
+    )
     banner_html = ""
     if banner:
         banner_html = (
             '<div class="line out">Solidity Flow Navigator running at '
             '<span class="link">http://127.0.0.1:8137</span></div>'
-            '<div class="line"><span class="prompt">norah@mac</span>'
-            '<span class="path">~/work</span><span class="sig">%</span> '
-            '<span class="cur">&#9611;</span></div>'
+            f'<div class="line">{PROMPT} <span class="cur">&#9611;</span></div>'
         )
     return f"""<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{{margin:0;height:100%;}}
-  body{{background:#14161b;display:flex;align-items:center;justify-content:center;
+  body{{background:#efeae0;display:flex;align-items:center;justify-content:center;
         font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}}
-  .win{{width:1180px;background:#1b1d23;border-radius:12px;overflow:hidden;
-        box-shadow:0 24px 80px rgba(0,0,0,.55);border:1px solid #2a2d36;}}
-  .bar{{height:44px;background:#23262e;display:flex;align-items:center;gap:9px;
-        padding:0 18px;}}
+  .win{{width:1180px;background:#fbfaf6;border-radius:12px;overflow:hidden;
+        box-shadow:0 18px 60px rgba(60,52,40,.18);border:1px solid #d8d4c8;}}
+  .bar{{height:44px;background:#efeadf;display:flex;align-items:center;gap:9px;
+        padding:0 18px;border-bottom:1px solid #e3ddcf;}}
   .dot{{width:13px;height:13px;border-radius:50%;}}
   .r{{background:#ff5f57;}} .y{{background:#febc2e;}} .g{{background:#28c840;}}
-  .title{{color:#8b8f9a;font-size:13px;margin-left:14px;}}
-  .body{{padding:26px 30px 34px;font-size:25px;line-height:1.7;color:#e6e8ee;}}
-  .line{{white-space:pre-wrap;word-break:break-all;}}
-  .prompt{{color:#7fd1b9;}} .path{{color:#7fb3eb;margin:0 .5ch;}}
-  .sig{{color:#8b8f9a;}}
-  .cmd{{color:#f2f4f8;}}
-  .out{{color:#9aa0ad;margin-top:6px;}}
-  .link{{color:#7fb3eb;text-decoration:underline;}}
-  .cur{{color:#e6e8ee;}}
+  .title{{color:#9a9486;font-size:13px;margin-left:14px;}}
+  .body{{padding:30px 30px 36px;font-size:25px;line-height:1.85;color:#2c2c2c;}}
+  .line{{white-space:pre;}}
+  .prompt{{color:#2f7d5b;}} .path{{color:#2f6db0;}} .sig{{color:#9a9486;}}
+  .cmd{{color:#1f1f1f;}} .out{{color:#6b6a64;}}
+  .link{{color:#2f6db0;text-decoration:underline;}} .cur{{color:#2c2c2c;}}
 </style></head><body>
   <div class="win">
     <div class="bar"><span class="dot r"></span><span class="dot y"></span>
       <span class="dot g"></span><span class="title">solflow &#8212; zsh</span></div>
-    <div class="body">
-      <div class="line"><span class="prompt">norah@mac</span>
-        <span class="path">~/work</span><span class="sig">%</span>
-        <span class="cmd"> {command}</span>{cur}</div>
-      {banner_html}
-    </div>
+    <div class="body">{cmd_line}{banner_html}</div>
   </div>
 </body></html>"""
 
@@ -84,22 +89,88 @@ def wait_ready(page) -> None:
     page.wait_for_timeout(700)
 
 
-def expand_liquidate(page) -> None:
-    """Click a few root call sites, then one level deeper in accrueInterest."""
-    for i in range(3):
-        try:
-            page.locator("#nodes .node").first.locator(".src-line--call").nth(i).click(
-                timeout=2500
-            )
-            page.wait_for_timeout(550)
-        except Exception as e:
-            print("  root click", i, "skip:", e)
+def expand_swap_overview(page) -> None:
+    """Build a bushy, readable bird's-eye of the swap flow, then fit. Collapses
+    to the root first (so the result is independent of any persisted state),
+    then drills: every root call site, _swap -> Pool.swap, Pool.swap's swap-step
+    math, and the beforeSwap hook subtree. The true --expand-all tree is far too
+    tall to read when fitted (~9645x133771 px), so this shows a rich slice (~30
+    nodes) that still fills the canvas legibly. Clicks are dispatched onto the
+    call-line spans (delegated handler), immune to pan/zoom and sidebar overlay."""
     try:
-        acc = page.locator('.node--function:has-text("accrueInterest")').first
-        acc.locator(".src-line--call").first.click(timeout=2500)
-        page.wait_for_timeout(550)
+        page.locator("#collapse-all-btn").click(timeout=2000)
+        page.wait_for_timeout(600)
     except Exception as e:
-        print("  accrueInterest deeper click skip:", e)
+        print("  collapse-all skip:", e)
+    drill = """(a) => {
+        const {marker, limit} = a;
+        const ns = [...document.querySelectorAll('#nodes .node')];
+        const node = marker === null
+            ? ns[0]
+            : ns.find(n => n !== ns[0] && (n.textContent || '').includes(marker));
+        if (!node) return -1;
+        let n = 0;
+        for (const l of node.querySelectorAll('.src-line--call')) {
+            if (l.classList.contains('src-line--expanded')) continue;
+            l.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+            n++;
+            if (limit && n >= limit) break;
+        }
+        return n;
+    }"""
+    steps = [
+        ("root", {"marker": None, "limit": 0}),
+        ("_swap", {"marker": "pool.swap(", "limit": 0}),
+        ("Pool.swap", {"marker": "computeSwapStep", "limit": 6}),
+        ("beforeSwap", {"marker": "callHook(", "limit": 4}),
+    ]
+    for label, arg in steps:
+        print("  overview drill", label, "opened:", page.evaluate(drill, arg))
+        page.wait_for_timeout(700)
+    try:
+        page.locator("#reset-view").click(timeout=2500)
+        page.wait_for_timeout(1300)
+    except Exception as e:
+        print("  fit skip:", e)
+
+
+def expand_swap(page) -> None:
+    """Expand the interesting swap subtree, then fit. Clicks are dispatched
+    straight onto the call-line spans (the nodes-layer handler is delegated and
+    reads data-child-ids), so expansion is immune to pan/zoom hit-testing and
+    the call-tree sidebar overlay. Opens the library-mediated beforeSwap call
+    (which bottoms out in an unresolved low-level hook call) and the _swap
+    helper at the root, then one level deeper into pool.swap."""
+    opened = page.evaluate("""() => {
+            const root = document.querySelector('#nodes .node');
+            if (!root) return 0;
+            let n = 0;
+            for (const l of root.querySelectorAll('.src-line--call')) {
+                const t = l.textContent || '';
+                if (t.includes('beforeSwap(') || t.includes('_swap(')) {
+                    l.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                    n++;
+                }
+            }
+            return n;
+        }""")
+    print("  root call lines opened:", opened)
+    page.wait_for_timeout(700)
+    # one level deeper into Pool.swap. The _swap node is the one whose body
+    # calls pool.swap(); the call spans two source lines, so the clickable
+    # call site is its first .src-line--call (the assignment line), not the
+    # line literally reading "pool.swap(".
+    deeper = page.evaluate("""() => {
+            const nodes = [...document.querySelectorAll('#nodes .node')];
+            const swapNode = nodes.find(n => (n.textContent || '').includes('pool.swap('));
+            if (!swapNode) return false;
+            const line = swapNode.querySelector('.src-line--call');
+            if (!line) return false;
+            line.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+            return true;
+        }""")
+    print("  pool.swap deeper opened:", deeper)
+    page.wait_for_timeout(700)
     try:
         page.locator("#reset-view").click(timeout=2000)
         page.wait_for_timeout(900)
@@ -115,19 +186,15 @@ def main() -> None:
         ctx = browser.new_context(viewport=VIEW, device_scale_factor=DSF)
         page = ctx.new_page()
         page.set_content(
-            terminal_html("solflow ../test-repos/mor", cursor=True, banner=False)
+            terminal_html("solflow ../test-repos/v4-", cursor=True, banner=False)
         )
         grab(page, "01_term_typing.png")
         page.set_content(
-            terminal_html(
-                "solflow ../test-repos/morpho-blue", cursor=True, banner=False
-            )
+            terminal_html("solflow ../test-repos/v4-core", cursor=True, banner=False)
         )
         grab(page, "02_term_full.png")
         page.set_content(
-            terminal_html(
-                "solflow ../test-repos/morpho-blue", cursor=False, banner=True
-            )
+            terminal_html("solflow ../test-repos/v4-core", cursor=False, banner=True)
         )
         grab(page, "03_term_run.png")
 
@@ -136,30 +203,40 @@ def main() -> None:
         page.wait_for_timeout(500)
         grab(page, "04_index_light.png")
 
-        page.goto(S1 + LIQ, wait_until="networkidle")
+        page.goto(S1 + SWAP, wait_until="networkidle")
         wait_ready(page)
-        grab(page, "05_liquidate_root_light.png")
+        grab(page, "05_swap_root_light.png")
 
-        # detail: tight element shot of the root node's source
+        # detail: the root node's source with breathing room around it (a clip
+        # padded beyond the node box, so it reads as zoomed-out, not cropped tight)
         try:
-            page.locator("#nodes .node").first.screenshot(
-                path=str(OUT / "06_liquidate_detail_light.png")
-            )
-            print("saved 06_liquidate_detail_light.png")
+            box = page.locator("#nodes .node").first.bounding_box()
+            pad_x, pad_y = 170, 120
+            cx = max(0, box["x"] - pad_x)
+            cy = max(0, box["y"] - pad_y)
+            clip = {
+                "x": cx,
+                "y": cy,
+                "width": min(VIEW["width"] - cx, box["width"] + 2 * pad_x),
+                "height": min(VIEW["height"] - cy, box["height"] + 2 * pad_y),
+            }
+            page.screenshot(path=str(OUT / "06_swap_detail_light.png"), clip=clip)
+            print("saved 06_swap_detail_light.png")
         except Exception as e:
-            print("  detail element shot skip:", e)
-            grab(page, "06_liquidate_detail_light.png")
+            print("  detail clip skip:", e)
+            grab(page, "06_swap_detail_light.png")
 
         # expanded (a few calls + one deeper), fit, full-viewport shot
-        page.goto(S1 + LIQ, wait_until="networkidle")
+        page.goto(S1 + SWAP, wait_until="networkidle")
         wait_ready(page)
-        expand_liquidate(page)
-        grab(page, "07_liquidate_expanded_light.png")
+        expand_swap(page)
+        grab(page, "07_swap_expanded_light.png")
 
-        # full tree zoomed out (S2 expand-all)
-        page.goto(S2 + LIQ, wait_until="networkidle")
+        # bird's-eye: a deep, bushy slice of the swap tree, fit to frame
+        page.goto(S1 + SWAP, wait_until="networkidle")
         wait_ready(page)
-        grab(page, "08_liquidate_full_light.png")
+        expand_swap_overview(page)
+        grab(page, "08_swap_full_light.png")
         ctx.close()
 
         # ---- dark frames (real solflow_theme=dark cookie) ----
@@ -167,7 +244,6 @@ def main() -> None:
         dctx.add_cookies(
             [
                 {"name": "solflow_theme", "value": "dark", "url": S1 + "/"},
-                {"name": "solflow_theme", "value": "dark", "url": S2 + "/"},
             ]
         )
         dp = dctx.new_page()
@@ -184,14 +260,15 @@ def main() -> None:
             print("  header shot skip:", e)
         grab(dp, "10_index_dark.png")
 
-        dp.goto(S1 + LIQ, wait_until="networkidle")
+        dp.goto(S1 + SWAP, wait_until="networkidle")
         wait_ready(dp)
-        expand_liquidate(dp)
-        grab(dp, "11_liquidate_expanded_dark.png")
+        expand_swap(dp)
+        grab(dp, "11_swap_expanded_dark.png")
 
-        dp.goto(S2 + LIQ, wait_until="networkidle")
+        dp.goto(S1 + SWAP, wait_until="networkidle")
         wait_ready(dp)
-        grab(dp, "12_liquidate_full_dark.png")
+        expand_swap_overview(dp)
+        grab(dp, "12_swap_full_dark.png")
         dctx.close()
 
         browser.close()
