@@ -45,6 +45,21 @@ def font(paths: list[str], size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+def wordmark_font(size: int, instance: bytes = b"Semibold") -> ImageFont.FreeTypeFont:
+    """SF Mono at a named weight. The app header wordmark is --font-mono at
+    font-weight 600 = Semibold; SFNSMono.ttf is variable with that named
+    instance. Falls back to the first available MONO face if unavailable."""
+    try:
+        f = ImageFont.truetype("/System/Library/Fonts/SFNSMono.ttf", size)
+        try:
+            f.set_variation_by_name(instance)
+        except Exception:
+            pass
+        return f
+    except OSError:
+        return font(MONO, size)
+
+
 def main() -> None:
     src = Image.open(FRAMES / "05_swap_root_light.png").convert("RGB")
     crop = src.crop((620, 230, 2860, 1350)).resize((W, H), Image.LANCZOS)
@@ -64,7 +79,7 @@ def main() -> None:
     x = 84
     # `solFlow` wordmark (v0.23.0): monospace, `sol` in ink (--fg-text #2c2c2c),
     # `Flow` in blue (--node-mod-border #3a6db0) — matches the app header brand.
-    mark = font(MONO, 96)
+    mark = wordmark_font(96)
     d.text((x, 188), "sol", font=mark, fill=(44, 44, 44))
     sol_w = d.textlength("sol", font=mark)
     d.text((x + sol_w, 188), "Flow", font=mark, fill=(58, 109, 176))
