@@ -62,8 +62,14 @@ def main() -> None:
 
     d = ImageDraw.Draw(card)
     x = 84
-    d.text((x, 188), "SolFlow", font=font(BOLD, 96), fill=(38, 38, 36))
-    d.rectangle([x + 3, 320, x + 132, 326], fill=(58, 109, 176))
+    # `solFlow` wordmark (v0.23.0): monospace, `sol` in ink (--fg-text #2c2c2c),
+    # `Flow` in blue (--node-mod-border #3a6db0) — matches the app header brand.
+    mark = font(MONO, 96)
+    d.text((x, 188), "sol", font=mark, fill=(44, 44, 44))
+    sol_w = d.textlength("sol", font=mark)
+    d.text((x + sol_w, 188), "Flow", font=mark, fill=(58, 109, 176))
+    word_w = d.textlength("solFlow", font=mark)
+    d.rectangle([x + 2, 322, x + 2 + word_w, 328], fill=(58, 109, 176))
     d.text(
         (x, 360),
         "Read a Solidity contract the way it executes.",
