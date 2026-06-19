@@ -25,3 +25,10 @@ DESIGN_BRIEF.md
 # Installed coding-assistant skills (e.g. `npx skills add`); local tooling, not source.
 .agents/
 skills-lock.json
+
+# Internal working docs — kept on disk for development, not part of the public repo.
+CLAUDE.md
+solidity-flow-navigator.md
+
+# Local config written by the tool (Save bindings); a per-checkout runtime artifact, not source.
+solflow.toml

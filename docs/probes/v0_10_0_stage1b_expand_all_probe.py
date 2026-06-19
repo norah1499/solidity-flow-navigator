@@ -24,7 +24,7 @@ Run from the project root with the server already running on :8123:
     .venv/bin/python docs/probes/v0_10_0_stage1b_expand_all_probe.py
 
 This file is a development artifact; it is intentionally not part of the
-pytest suite. Per spec/CLAUDE.md, probes live under docs/probes/ and are
+pytest suite. Probes live under docs/probes/ and are
 preserved across releases as historical reference.
 """
 

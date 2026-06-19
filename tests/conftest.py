@@ -1,7 +1,7 @@
 """Shared pytest fixtures for the integration tests.
 
 The Solmate test repository lives outside this codebase as a sibling
-``test-repos/`` directory (CLAUDE.md). Discovery walks up from this file's
+``test-repos/`` directory. Discovery walks up from this file's
 parents to find that sibling, so the fixtures work both from the primary
 checkout and from a linked git worktree (e.g. under ``.claude/worktrees/``).
 

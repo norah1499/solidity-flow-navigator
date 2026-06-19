@@ -5,7 +5,7 @@ This module is the public Layer 2 → Layer 3 contract (spec §11.3). Layer 3
 serializes these via ``dataclasses.asdict`` and exposes them over JSON; the
 ``node_type`` field discriminates the FlowNode union for the frontend.
 
-Stdlib + ``typing`` only, per the architectural rule (CLAUDE.md, spec §7).
+Stdlib + ``typing`` only, per the Layer 2 architectural rule (no external imports).
 ``SourceLocation`` is reused from Layer 1 rather than redefined: Layer 2
 passes it through unchanged (per §11.3, "passed through from Layer 1"), and
 redefining it would create two parallel types that must be kept in sync.

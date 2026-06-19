@@ -32,7 +32,7 @@ Run from the project root:
     .venv/bin/python docs/probes/v0_10_2_stage1_swap_double_emit_probe.py
 
 This file is a development artifact; it is intentionally not part of the
-pytest suite. Per spec/CLAUDE.md, probes live under docs/probes/ and are
+pytest suite. Probes live under docs/probes/ and are
 preserved across releases as historical reference.
 """
 
