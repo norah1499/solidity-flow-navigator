@@ -149,3 +149,7 @@ pytest
 black --check .
 ruff check
 ```
+
+## License
+
+SolFlow is licensed under the [GNU AGPL-3.0-only](LICENSE). Copyright (C) 2026 Norah.
