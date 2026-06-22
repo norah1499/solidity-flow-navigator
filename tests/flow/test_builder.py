@@ -10,7 +10,10 @@ Solmate updates that rename or remove an entry point produce immediately
 diagnosable failures rather than ``StopIteration`` or empty matches.
 """
 
+import logging
 from collections.abc import Callable, Iterator
+
+import pytest
 
 from solidity_flow_navigator.analysis.types import (
     CallEdge,
@@ -2899,3 +2902,180 @@ def test_signature_type_roots_dedup_in_order_and_skip_misses() -> None:
     )
     root = build_flows(facts, Scope())[0].root
     assert root.signature_type_roots == ("X", "Y")  # deduped, ordered, miss skipped
+
+
+# ---------------------------------------------------------------------------
+# Contract name collisions (spec §11.5). Regression for the ctf-exchange-v2
+# crash: two distinct contracts both named "Pausable" lived in different
+# files. Resolution by bare name bound whichever won the name-keyed map and
+# modifier lookup raised KeyError; resolution by stable uid binds the right
+# one regardless of map order.
+# ---------------------------------------------------------------------------
+
+
+def _csl(filename_relative: str) -> SourceLocation:
+    return SourceLocation(
+        filename_absolute="/abs/" + filename_relative,
+        filename_relative=filename_relative,
+        start=0,
+        length=1,
+        lines=(1,),
+        starting_column=1,
+        ending_column=2,
+    )
+
+
+def _func_in_file(
+    declarer: str,
+    full_name: str,
+    file: str,
+    *,
+    is_modifier: bool = False,
+    is_entry_point: bool = False,
+    modifier_names: tuple[str, ...] = (),
+) -> Function:
+    return Function(
+        canonical_name=f"{declarer}.{full_name}",
+        name=full_name.split("(")[0],
+        full_name=full_name,
+        contract_declarer_name=declarer,
+        visibility="internal" if is_modifier else "external",
+        is_constructor=False,
+        is_fallback=False,
+        is_receive=False,
+        is_modifier=is_modifier,
+        is_implemented=True,
+        is_virtual=False,
+        is_entry_point=is_entry_point,
+        payable=False,
+        view=False,
+        pure=False,
+        parameters=(),
+        returns=(),
+        modifier_names=modifier_names,
+        source_location=_csl(file),
+        source_code="",
+        calls=(),
+    )
+
+
+def _contract_in_file(
+    name: str,
+    file: str,
+    *,
+    is_abstract: bool = False,
+    linearized_base_contract_names: tuple[str, ...] = (),
+    linearized_base_contract_uids: tuple[tuple[str, str], ...] = (),
+    functions: tuple[Function, ...] = (),
+    modifiers: tuple[Function, ...] = (),
+) -> Contract:
+    return Contract(
+        name=name,
+        kind="contract",
+        is_interface=False,
+        is_library=False,
+        is_abstract=is_abstract,
+        linearized_base_contract_names=linearized_base_contract_names,
+        linearized_base_contract_uids=linearized_base_contract_uids,
+        immediate_base_contract_names=linearized_base_contract_names,
+        source_location=_csl(file),
+        functions=functions,
+        modifiers=modifiers,
+    )
+
+
+def test_modifier_resolves_through_same_named_contract_by_uid() -> None:
+    """Two distinct contracts named ``Pausable`` in different files; the adapter
+    inherits the one declaring ``onlyUnpaused``. Resolution by uid (§11.5) finds
+    the right modifier even though the OTHER ``Pausable`` wins the name-keyed
+    map. Direct regression for the ctf-exchange-v2 ``KeyError``.
+    """
+
+    collateral = "src/collateral/abstract/Pausable.sol"
+    exchange = "src/exchange/mixins/Pausable.sol"
+    adapter_file = "src/adapters/CtfCollateralAdapter.sol"
+
+    collateral_pausable = _contract_in_file(
+        "Pausable",
+        collateral,
+        is_abstract=True,
+        modifiers=(
+            _func_in_file("Pausable", "onlyUnpaused()", collateral, is_modifier=True),
+        ),
+    )
+    exchange_pausable = _contract_in_file(
+        "Pausable",
+        exchange,
+        is_abstract=True,
+        modifiers=(
+            _func_in_file("Pausable", "notPaused()", exchange, is_modifier=True),
+        ),
+    )
+    redeem = _func_in_file(
+        "CtfCollateralAdapter",
+        "redeemPositions()",
+        adapter_file,
+        is_entry_point=True,
+        modifier_names=("onlyUnpaused",),
+    )
+    adapter = _contract_in_file(
+        "CtfCollateralAdapter",
+        adapter_file,
+        linearized_base_contract_names=("Pausable",),
+        linearized_base_contract_uids=((collateral, "Pausable"),),
+        functions=(redeem,),
+    )
+    # exchange Pausable LAST so it clobbers the name-keyed map (the pre-fix
+    # resolution path) — the modifier it carries is NOT onlyUnpaused, so a
+    # name-based lookup would raise the original KeyError.
+    facts = RepoFacts(
+        repo_path="/abs",
+        contracts=(collateral_pausable, adapter, exchange_pausable),
+        free_functions=(),
+    )
+
+    flows = build_flows(facts, Scope())
+    flow = _flow_by_entry_point(flows, "CtfCollateralAdapter", "redeemPositions()")
+    mods = [
+        c for c in flow.root.children if isinstance(c, FunctionNode) and c.is_modifier
+    ]
+    assert [m.name for m in mods] == ["onlyUnpaused"], (
+        "expected onlyUnpaused resolved via the collateral Pausable's uid; "
+        f"got {[m.name for m in mods]}"
+    )
+
+
+def test_canonical_name_collision_keeps_first_and_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two distinct contracts share a name AND a function signature, so their
+    Slither canonical names collide. The function map keeps the first and logs
+    the conflict rather than silently overwriting (§11.10 residual limitation).
+    """
+
+    foo_a = _contract_in_file(
+        "Foo",
+        "src/a/Foo.sol",
+        functions=(
+            _func_in_file("Foo", "bar()", "src/a/Foo.sol", is_entry_point=True),
+        ),
+    )
+    foo_b = _contract_in_file(
+        "Foo",
+        "src/b/Foo.sol",
+        functions=(
+            _func_in_file("Foo", "bar()", "src/b/Foo.sol", is_entry_point=True),
+        ),
+    )
+    facts = RepoFacts(repo_path="/abs", contracts=(foo_a, foo_b), free_functions=())
+
+    with caplog.at_level(
+        logging.WARNING, logger="solidity_flow_navigator.flow.builder"
+    ):
+        flows = build_flows(facts, Scope())
+
+    # Both Foo contracts still produce their entry-point flow — the collision
+    # is in the call-target map, not in entry enumeration.
+    assert len(flows) == 2
+    assert "Foo.bar()" in caplog.text
+    assert "collides between distinct contracts" in caplog.text

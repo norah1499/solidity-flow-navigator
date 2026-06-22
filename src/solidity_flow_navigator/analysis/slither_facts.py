@@ -74,6 +74,17 @@ def extract_facts(
 # ---------------------------------------------------------------------------
 
 
+def _contract_uid(c: SlitherContract, repo_root: Path) -> tuple[str, str]:
+    """Stable identity for a Slither contract: ``(filename_relative, name)``.
+
+    Mirrors ``Contract.uid`` (spec §11.5) so the uid computed here for a base
+    contract matches that base's own record, letting Layer 2 resolve a
+    linearization chain by identity rather than by bare (possibly colliding)
+    name.
+    """
+    return (_source_location(c.source_mapping, repo_root).filename_relative, c.name)
+
+
 def _build_contract(c: SlitherContract, repo_root: Path) -> Contract:
     declared = tuple(
         _build_function(f, repo_root, is_modifier=False) for f in c.functions_declared
@@ -98,6 +109,9 @@ def _build_contract(c: SlitherContract, repo_root: Path) -> Contract:
         is_library=c.is_library,
         is_abstract=bool(getattr(c, "is_abstract", False)),
         linearized_base_contract_names=tuple(b.name for b in c.inheritance),
+        linearized_base_contract_uids=tuple(
+            _contract_uid(b, repo_root) for b in c.inheritance
+        ),
         immediate_base_contract_names=tuple(b.name for b in c.immediate_inheritance),
         source_location=_source_location(c.source_mapping, repo_root),
         functions=functions,

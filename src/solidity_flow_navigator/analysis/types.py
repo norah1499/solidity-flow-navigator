@@ -162,6 +162,21 @@ class Function:
     # constructions (tests, getters) stay valid.
     signature_type_canonical_names: tuple[str, ...] = ()
 
+    @property
+    def contract_declarer_uid(self) -> tuple[str, str]:
+        """Stable identity of this function's declaring contract (spec §11.5).
+
+        The pair ``(filename_relative, name)`` — unique even when two contracts
+        share a name across files, which ``contract_declarer_name`` alone is
+        not. A function is lexically inside its declaring contract, so the
+        function's own source file is the declaring contract's file; the uid is
+        derivable here with no back-reference. ``("", "")`` for free functions
+        (no declarer), matching ``contract_declarer_name == ""``.
+        """
+        if not self.contract_declarer_name:
+            return ("", "")
+        return (self.source_location.filename_relative, self.contract_declarer_name)
+
 
 @dataclass(frozen=True, slots=True)
 class Contract:
@@ -184,6 +199,24 @@ class Contract:
     source_location: SourceLocation
     functions: tuple[Function, ...]  # declared here only
     modifiers: tuple[Function, ...]  # declared here only; all have is_modifier=True
+    # uids of the C3-linearized bases, parallel to linearized_base_contract_names
+    # (spec §11.5). Layer 1 fills this from Slither's actual base objects so
+    # Layer 2 resolves the chain by stable identity rather than by bare name,
+    # which is not globally unique. Defaulted so synthetic Contract
+    # constructions (tests) stay valid; when empty, Layer 2 falls back to
+    # name-keyed resolution (correct for non-colliding fixtures).
+    linearized_base_contract_uids: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def uid(self) -> tuple[str, str]:
+        """Stable identity of this contract (spec §11.5).
+
+        The pair ``(filename_relative, name)`` — unique because Solidity forbids
+        two top-level contracts sharing a name within one file, and stable
+        across reruns. Layer 2 keys its contract lookup on this rather than on
+        ``name``, which may collide across files.
+        """
+        return (self.source_location.filename_relative, self.name)
 
 
 @dataclass(frozen=True, slots=True)

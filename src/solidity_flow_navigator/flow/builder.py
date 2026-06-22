@@ -10,6 +10,7 @@ emitted as a ``FunctionNode`` with empty ``children`` per spec §11.10's v0
 limitation list.
 """
 
+import logging
 import math
 import re
 from collections.abc import Iterator
@@ -41,6 +42,8 @@ from .types import (
     UnresolvedReason,
 )
 from .virtual_dispatch import resolve_virtual_override
+
+_log = logging.getLogger(__name__)
 
 # Names of Slither-synthesized pseudo-functions that occasionally surface as
 # real-looking entry points in some Slither configurations. Layer 1 already
@@ -120,6 +123,7 @@ class _FlowBuilder:
         "facts",
         "scope",
         "_contracts_by_name",
+        "_contracts_by_uid",
         "_functions_by_canonical",
         "_type_defs_by_canonical",
         "_current_invoker_contract",
@@ -128,8 +132,18 @@ class _FlowBuilder:
     def __init__(self, facts: RepoFacts, scope: Scope) -> None:
         self.facts = facts
         self.scope = scope
+        # Contract lookup by stable uid (spec §11.5) — the load-bearing map for
+        # resolving declaring contracts and linearization links. uids are unique
+        # even when two contracts share a name across files. The name-keyed map
+        # is retained only as a fallback for fixtures without uids and for
+        # interface-binding lookup by user-supplied name (§11.10); on a name
+        # collision it keeps the last contract, which is acceptable because
+        # identity resolution no longer relies on it.
         self._contracts_by_name: dict[str, Contract] = {
             c.name: c for c in facts.contracts
+        }
+        self._contracts_by_uid: dict[tuple[str, str], Contract] = {
+            c.uid: c for c in facts.contracts
         }
         # Struct/enum registry keyed by canonical_name, for the signature-type
         # panel (spec §10.2). Built once here like _functions_by_canonical.
@@ -137,19 +151,73 @@ class _FlowBuilder:
             t.canonical_name: t for t in facts.type_defs
         }
         # All callable Function records (contract functions, modifiers, and
-        # top-level free functions) keyed by canonical_name. Layer 1's
-        # canonical_name is globally unique. Free functions have no contract
-        # prefix in their canonical_name (e.g. "toStringOZ(uint256)") and
-        # carry an empty contract_declarer_name.
+        # top-level free functions) keyed by canonical_name. Free functions have
+        # no contract prefix in their canonical_name (e.g. "toStringOZ(uint256)")
+        # and carry an empty contract_declarer_name. Slither's canonical_name is
+        # name-derived ("Contract.fn(types)"), so it is NOT globally unique when
+        # two contracts share a name (spec §11.5). On such a collision we keep
+        # the first registrant and log the conflict rather than silently
+        # overwriting (§11.10 residual limitation).
         self._functions_by_canonical: dict[str, Function] = {}
+
+        def _register(fn: Function) -> None:
+            existing = self._functions_by_canonical.get(fn.canonical_name)
+            if existing is None:
+                self._functions_by_canonical[fn.canonical_name] = fn
+            elif existing.contract_declarer_uid != fn.contract_declarer_uid:
+                _log.warning(
+                    "canonical name %r collides between distinct contracts "
+                    "%s and %s; keeping the first (spec §11.5/§11.10)",
+                    fn.canonical_name,
+                    existing.contract_declarer_uid,
+                    fn.contract_declarer_uid,
+                )
+
         for c in facts.contracts:
             for f in c.functions:
-                self._functions_by_canonical[f.canonical_name] = f
+                _register(f)
             for m in c.modifiers:
-                self._functions_by_canonical[m.canonical_name] = m
+                _register(m)
         for ff in facts.free_functions:
-            self._functions_by_canonical[ff.canonical_name] = ff
+            _register(ff)
         self._current_invoker_contract: Contract | None = None
+
+    # ------------------------------------------------------------------
+    # Contract identity resolution (§11.5)
+    # ------------------------------------------------------------------
+
+    def _contract_for(self, uid: tuple[str, str], name: str) -> Contract | None:
+        """Resolve a contract reference by stable uid, falling back to name.
+
+        uid resolution (spec §11.5) is exact even when two contracts share a
+        name across files. The name fallback covers synthetic fixtures that do
+        not populate uids; it is correct for them because such fixtures do not
+        collide names.
+        """
+        contract = self._contracts_by_uid.get(uid)
+        if contract is not None:
+            return contract
+        return self._contracts_by_name.get(name)
+
+    def _linearization(self, contract: Contract) -> Iterator[Contract]:
+        """Yield ``contract`` then its C3-linearized bases (most-derived first).
+
+        Resolves each chain link by uid when Layer 1 supplied base uids (spec
+        §11.5); otherwise falls back to the name chain for fixtures without
+        them. A chain link absent from the lookup is skipped silently, matching
+        the tolerance for ``facts.contracts`` being a subset of what Slither
+        sees.
+        """
+        if contract.linearized_base_contract_uids:
+            keys = (contract.uid,) + contract.linearized_base_contract_uids
+            lookup = self._contracts_by_uid
+        else:
+            keys = (contract.name,) + contract.linearized_base_contract_names
+            lookup = self._contracts_by_name
+        for key in keys:
+            resolved = lookup.get(key)
+            if resolved is not None:
+                yield resolved
 
     # ------------------------------------------------------------------
     # Entry-point enumeration (§11.4)
@@ -162,28 +230,18 @@ class _FlowBuilder:
         order (most-derived first). Dedupes by ``full_name``, keeping the
         most-derived occurrence.
 
-        Layer 1 reports ``linearized_base_contract_names`` as bases-only
-        (excluding the contract itself), mirroring Slither's
-        ``contract.inheritance``. The spec's instruction to "walk
-        linearized_base_contract_names" only makes sense if the contract
+        Layer 1 reports the linearization as bases-only (excluding the contract
+        itself), mirroring Slither's ``contract.inheritance``. The spec's
+        instruction to walk the linearization only makes sense if the contract
         itself comes first, otherwise the contract's own externals (e.g.
-        MockERC20.mint) would never enumerate. We prepend ``contract.name``
-        explicitly.
+        MockERC20.mint) would never enumerate. ``_linearization`` prepends the
+        contract and resolves each link by uid (§11.5). A link absent from
+        facts is skipped silently — a benign omission must not block the whole
+        enumeration.
         """
 
         seen_full_names: set[str] = set()
-        chain: tuple[str, ...] = (
-            contract.name,
-        ) + contract.linearized_base_contract_names
-        for base_name in chain:
-            base = self._contracts_by_name.get(base_name)
-            if base is None:
-                # A linearized base that isn't in facts.contracts: skip
-                # silently rather than raise. This can happen if the project
-                # has source files Slither can see but the recon analysis
-                # excluded; raising here would block the entire entry-point
-                # enumeration over what may be a benign omission.
-                continue
+        for base in self._linearization(contract):
             for func in base.functions:
                 if not func.is_entry_point:
                     continue
@@ -221,6 +279,7 @@ class _FlowBuilder:
             body_children, body_builtins = self._process_calls(
                 entry_func.calls,
                 caller_declarer=entry_func.contract_declarer_name,
+                caller_declarer_uid=entry_func.contract_declarer_uid,
                 path=path,
             )
             root_node = FunctionNode(
@@ -275,7 +334,9 @@ class _FlowBuilder:
         if not func.modifier_names:
             return ()
 
-        declarer = self._contracts_by_name.get(func.contract_declarer_name)
+        declarer = self._contract_for(
+            func.contract_declarer_uid, func.contract_declarer_name
+        )
         if declarer is None:
             raise KeyError(
                 f"declarer {func.contract_declarer_name!r} of function "
@@ -285,9 +346,14 @@ class _FlowBuilder:
 
         children: list[FlowNode] = []
         for mod_name in func.modifier_names:
-            lexical_mod = resolve_modifier(mod_name, declarer, self._contracts_by_name)
+            lexical_mod = resolve_modifier(
+                mod_name, declarer, self._contracts_by_name, self._contracts_by_uid
+            )
             resolved = resolve_virtual_override(
-                self._require_invoker(), lexical_mod, self._contracts_by_name
+                self._require_invoker(),
+                lexical_mod,
+                self._contracts_by_name,
+                self._contracts_by_uid,
             )
             # v0.5 iter-2: locate the modifier-name application within the
             # function's signature so the renderer can anchor the modifier's
@@ -362,6 +428,7 @@ class _FlowBuilder:
         children, builtins = self._process_calls(
             func.calls,
             caller_declarer=func.contract_declarer_name,
+            caller_declarer_uid=func.contract_declarer_uid,
             path=new_path,
         )
         return FunctionNode(
@@ -500,6 +567,7 @@ class _FlowBuilder:
         self,
         calls: tuple[CallEdge, ...],
         caller_declarer: str,
+        caller_declarer_uid: tuple[str, str],
         path: frozenset[str],
     ) -> tuple[tuple[FlowNode, ...], tuple[str, ...]]:
         """Split outgoing calls into FlowNode children and folded builtin markers.
@@ -544,6 +612,7 @@ class _FlowBuilder:
             result = self._dispatch_edge(
                 edge,
                 caller_declarer=caller_declarer,
+                caller_declarer_uid=caller_declarer_uid,
                 path=path,
             )
             if result is None:
@@ -563,6 +632,7 @@ class _FlowBuilder:
         self,
         edge: CallEdge,
         caller_declarer: str,
+        caller_declarer_uid: tuple[str, str],
         path: frozenset[str],
     ) -> FlowNode | str | None:
         """Apply §11.9's dispatch table to one edge.
@@ -579,6 +649,7 @@ class _FlowBuilder:
             return self._handle_internal_or_library(
                 edge,
                 caller_declarer=caller_declarer,
+                caller_declarer_uid=caller_declarer_uid,
                 path=path,
                 is_library=False,
             )
@@ -586,6 +657,7 @@ class _FlowBuilder:
             return self._handle_internal_or_library(
                 edge,
                 caller_declarer=caller_declarer,
+                caller_declarer_uid=caller_declarer_uid,
                 path=path,
                 is_library=True,
             )
@@ -621,6 +693,7 @@ class _FlowBuilder:
         self,
         edge: CallEdge,
         caller_declarer: str,
+        caller_declarer_uid: tuple[str, str],
         path: frozenset[str],
         is_library: bool,
     ) -> FlowNode | None:
@@ -678,7 +751,7 @@ class _FlowBuilder:
         # would re-resolve back to the most-derived override — the opposite
         # of what `super` means.
         invoked_via_super = (not is_library) and self._is_super_internal_call(
-            lexical_target, caller_declarer
+            lexical_target, caller_declarer, caller_declarer_uid
         )
 
         # Virtual dispatch (§11.5, v0.3): re-resolve through the invoker's
@@ -690,6 +763,7 @@ class _FlowBuilder:
                 self._require_invoker(),
                 lexical_target,
                 self._contracts_by_name,
+                self._contracts_by_uid,
             )
             if resolved is None:
                 return UnresolvedNode(
@@ -738,7 +812,9 @@ class _FlowBuilder:
         # this check they fell into the inherited-badge branch and rendered
         # as "Morpho.mulDivDown — inherited from MathLib", which is never
         # true (contracts cannot inherit from libraries).
-        target_declarer = self._contracts_by_name.get(target.contract_declarer_name)
+        target_declarer = self._contract_for(
+            target.contract_declarer_uid, target.contract_declarer_name
+        )
         target_on_library = target_declarer is not None and target_declarer.is_library
         return self._build_function_node(
             target,
@@ -816,8 +892,8 @@ class _FlowBuilder:
         # own bodyless declaration. If the auditor bound that interface to a
         # concrete contract, resolve into it; otherwise fall through to the
         # default rendering (the interface declaration as an external node).
-        target_declarer = self._contracts_by_name.get(
-            lexical_target.contract_declarer_name
+        target_declarer = self._contract_for(
+            lexical_target.contract_declarer_uid, lexical_target.contract_declarer_name
         )
         if target_declarer is not None and target_declarer.is_interface:
             bound = self._try_bind(
@@ -836,10 +912,10 @@ class _FlowBuilder:
         # dispatch goes through the target's own contract type, not the
         # invoker's chain.
         invoker = self._require_invoker()
-        is_self_call = lexical_target.contract_declarer_name == invoker.name
+        is_self_call = lexical_target.contract_declarer_uid == invoker.uid
         if is_self_call:
             resolved = resolve_virtual_override(
-                invoker, lexical_target, self._contracts_by_name
+                invoker, lexical_target, self._contracts_by_name, self._contracts_by_uid
             )
             if resolved is None:
                 return UnresolvedNode(
@@ -978,13 +1054,7 @@ class _FlowBuilder:
         turns that into an ``INTERFACE_BINDING_FAILED`` node.
         """
 
-        chain: tuple[str, ...] = (
-            bound_contract.name,
-        ) + bound_contract.linearized_base_contract_names
-        for contract_name in chain:
-            contract = self._contracts_by_name.get(contract_name)
-            if contract is None:
-                continue
+        for contract in self._linearization(bound_contract):
             for candidate in contract.functions:
                 if not candidate.is_implemented:
                     continue
@@ -1005,7 +1075,12 @@ class _FlowBuilder:
             call_site=edge.source_location,
         )
 
-    def _is_super_internal_call(self, target: Function, caller_declarer: str) -> bool:
+    def _is_super_internal_call(
+        self,
+        target: Function,
+        caller_declarer: str,
+        caller_declarer_uid: tuple[str, str],
+    ) -> bool:
         """Heuristic super-call detection (§11.5).
 
         Layer 1 tags ``super.X()`` calls as ``kind="internal"`` with the
@@ -1021,12 +1096,13 @@ class _FlowBuilder:
         intentionally doesn't import Slither types. Surfacing it would
         require a Layer 1 amendment; the heuristic is exact for normal
         inheritance and only ambiguous in pathological cases that Solmate
-        does not exhibit.
+        does not exhibit. The caller is identified by uid (§11.5) so two
+        contracts sharing a name do not read as the same contract.
         """
 
-        if target.contract_declarer_name == caller_declarer:
+        if target.contract_declarer_uid == caller_declarer_uid:
             return False  # same-contract call cannot be super
-        caller_contract = self._contracts_by_name.get(caller_declarer)
+        caller_contract = self._contract_for(caller_declarer_uid, caller_declarer)
         if caller_contract is None:
             return False
         for f in caller_contract.functions:

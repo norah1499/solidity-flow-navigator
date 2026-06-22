@@ -20,6 +20,7 @@ def resolve_virtual_override(
     invoker_contract: Contract,
     lexical_target: Function,
     contracts_by_name: dict[str, Contract],
+    contracts_by_uid: dict[tuple[str, str], Contract] | None = None,
 ) -> Function | None:
     """Return the most-derived implementation of ``lexical_target``'s
     signature reachable from ``invoker_contract``'s C3 chain.
@@ -40,11 +41,13 @@ def resolve_virtual_override(
     signature (no implementation anywhere). The caller emits an
     ``UnresolvedNode`` with ``ABSTRACT_NO_IMPLEMENTATION`` for this case.
 
-    ``contracts_by_name`` provides the lookup from contract name to
-    ``Contract`` record so we can read each chain link's ``functions``
-    and ``modifiers``. A linearized base name not present in the map is
-    skipped silently — same as the entry-point enumeration's tolerance
-    for facts.contracts being a subset of what Slither sees.
+    Contract identity is resolved by stable uid when ``contracts_by_uid`` is
+    supplied and the invoker carries base uids (spec §11.5) — exact even when
+    two contracts share a name across files. Without it (synthetic fixtures)
+    the walk falls back to the name chain via ``contracts_by_name``, which is
+    correct for fixtures that do not collide names. A chain link not present in
+    the chosen map is skipped silently — same as the entry-point enumeration's
+    tolerance for facts.contracts being a subset of what Slither sees.
     """
 
     if not lexical_target.is_virtual:
@@ -53,11 +56,16 @@ def resolve_virtual_override(
     target_full_name = lexical_target.full_name
     is_modifier = lexical_target.is_modifier
 
-    chain: tuple[str, ...] = (
-        invoker_contract.name,
-    ) + invoker_contract.linearized_base_contract_names
-    for contract_name in chain:
-        contract = contracts_by_name.get(contract_name)
+    if contracts_by_uid is not None and invoker_contract.linearized_base_contract_uids:
+        chain = (invoker_contract.uid,) + invoker_contract.linearized_base_contract_uids
+        lookup = contracts_by_uid
+    else:
+        chain = (
+            invoker_contract.name,
+        ) + invoker_contract.linearized_base_contract_names
+        lookup = contracts_by_name
+    for key in chain:
+        contract = lookup.get(key)
         if contract is None:
             continue
         candidates = contract.modifiers if is_modifier else contract.functions
