@@ -156,22 +156,21 @@ class _FlowBuilder:
         # and carry an empty contract_declarer_name. Slither's canonical_name is
         # name-derived ("Contract.fn(types)"), so it is NOT globally unique when
         # two contracts share a name (spec §11.5). On such a collision we keep
-        # the first registrant and log the conflict rather than silently
-        # overwriting (§11.10 residual limitation).
+        # the first registrant rather than silently overwriting, and surface it
+        # (§11.10 residual limitation). Collisions are tallied per contract-pair
+        # and logged once per pair below — a repo that declares the same
+        # interface twice (e.g. ctf-exchange-v2's two IConditionalTokens) should
+        # emit one diagnostic line per pair, not one per shared method.
         self._functions_by_canonical: dict[str, Function] = {}
+        collisions: dict[tuple[tuple[str, str], tuple[str, str]], int] = {}
 
         def _register(fn: Function) -> None:
             existing = self._functions_by_canonical.get(fn.canonical_name)
             if existing is None:
                 self._functions_by_canonical[fn.canonical_name] = fn
             elif existing.contract_declarer_uid != fn.contract_declarer_uid:
-                _log.warning(
-                    "canonical name %r collides between distinct contracts "
-                    "%s and %s; keeping the first (spec §11.5/§11.10)",
-                    fn.canonical_name,
-                    existing.contract_declarer_uid,
-                    fn.contract_declarer_uid,
-                )
+                key = (existing.contract_declarer_uid, fn.contract_declarer_uid)
+                collisions[key] = collisions.get(key, 0) + 1
 
         for c in facts.contracts:
             for f in c.functions:
@@ -180,6 +179,19 @@ class _FlowBuilder:
                 _register(m)
         for ff in facts.free_functions:
             _register(ff)
+
+        for (kept_uid, dropped_uid), count in collisions.items():
+            # Both declarers share the bare contract name (that is why their
+            # canonical names collide); they differ only by source file.
+            _log.warning(
+                "contract %r is declared in both %s and %s; %d function "
+                "signature(s) collide and the first is kept (spec §11.5/§11.10)",
+                kept_uid[1],
+                kept_uid[0],
+                dropped_uid[0],
+                count,
+            )
+
         self._current_invoker_contract: Contract | None = None
 
     # ------------------------------------------------------------------

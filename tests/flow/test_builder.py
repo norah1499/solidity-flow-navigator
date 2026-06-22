@@ -3045,12 +3045,14 @@ def test_modifier_resolves_through_same_named_contract_by_uid() -> None:
     )
 
 
-def test_canonical_name_collision_keeps_first_and_logs(
+def test_canonical_name_collision_keeps_first_and_logs_once_per_pair(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Two distinct contracts share a name AND a function signature, so their
+    """Two distinct contracts share a name AND two function signatures, so their
     Slither canonical names collide. The function map keeps the first and logs
-    the conflict rather than silently overwriting (§11.10 residual limitation).
+    the conflict rather than silently overwriting (§11.10). The two colliding
+    methods collapse into a SINGLE warning for the contract-pair, not one line
+    per method.
     """
 
     foo_a = _contract_in_file(
@@ -3058,6 +3060,7 @@ def test_canonical_name_collision_keeps_first_and_logs(
         "src/a/Foo.sol",
         functions=(
             _func_in_file("Foo", "bar()", "src/a/Foo.sol", is_entry_point=True),
+            _func_in_file("Foo", "baz()", "src/a/Foo.sol", is_entry_point=True),
         ),
     )
     foo_b = _contract_in_file(
@@ -3065,6 +3068,7 @@ def test_canonical_name_collision_keeps_first_and_logs(
         "src/b/Foo.sol",
         functions=(
             _func_in_file("Foo", "bar()", "src/b/Foo.sol", is_entry_point=True),
+            _func_in_file("Foo", "baz()", "src/b/Foo.sol", is_entry_point=True),
         ),
     )
     facts = RepoFacts(repo_path="/abs", contracts=(foo_a, foo_b), free_functions=())
@@ -3074,8 +3078,14 @@ def test_canonical_name_collision_keeps_first_and_logs(
     ):
         flows = build_flows(facts, Scope())
 
-    # Both Foo contracts still produce their entry-point flow — the collision
+    # Both Foo contracts still produce their entry-point flows — the collision
     # is in the call-target map, not in entry enumeration.
-    assert len(flows) == 2
-    assert "Foo.bar()" in caplog.text
-    assert "collides between distinct contracts" in caplog.text
+    assert len(flows) == 4
+    # Two methods collide but the warning is collapsed to one line per pair.
+    warnings = [
+        r for r in caplog.records if r.name == "solidity_flow_navigator.flow.builder"
+    ]
+    assert len(warnings) == 1, f"expected one collapsed warning, got {len(warnings)}"
+    assert "'Foo'" in caplog.text
+    assert "src/a/Foo.sol" in caplog.text and "src/b/Foo.sol" in caplog.text
+    assert "2 function" in caplog.text
