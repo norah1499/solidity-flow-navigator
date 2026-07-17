@@ -58,7 +58,16 @@ def extract_facts(
 
     repo_root = Path(repo_path).resolve()
     slither = Slither(crytic_compile_obj)
-    contracts = tuple(_build_contract(c, repo_root) for c in slither.contracts)
+    # Multi-unit builds (Hardhat hands Slither one compilation unit per source
+    # file) repeat a contract in ``slither.contracts`` once per unit that
+    # includes it, and every duplicate would produce an identical Flow per
+    # entry point downstream. Keep the first occurrence per uid; keying by uid
+    # (not bare name, §11.5) keeps same-name contracts in different files
+    # distinct, mirroring the free-function and type-def de-dup below.
+    unique_contracts: dict[tuple[str, str], SlitherContract] = {}
+    for c in slither.contracts:
+        unique_contracts.setdefault(_contract_uid(c, repo_root), c)
+    contracts = tuple(_build_contract(c, repo_root) for c in unique_contracts.values())
     free_functions = _build_free_functions(slither, repo_root)
     type_defs = _build_type_defs(slither, repo_root)
     return RepoFacts(
