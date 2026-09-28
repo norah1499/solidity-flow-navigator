@@ -2216,6 +2216,22 @@ pre.param-struct-body--after-members {
   border-top: 1px dashed var(--border-soft);
 }
 
+/* Constants panel (spec §10.2): reuses the .node-param-structs chrome. When it
+   follows the type-definitions panel, drop the top padding back so the two
+   rows share a single rule between them. */
+.node-param-structs + .node-constants {
+  padding-top: 0;
+}
+
+/* Origin of a constant declared outside the node's own contract (declaring
+   contract, or the file for a file-level constant). */
+.node-constant-origin {
+  margin: 0.45rem 0 0 0.1rem;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
 pre.param-struct-body {
   margin: 0.35rem 0 0;
   padding: 0.4rem 0.6rem;

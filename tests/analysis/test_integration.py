@@ -204,3 +204,20 @@ def test_type_registry_wired_and_consistent(solmate_facts: RepoFacts) -> None:
                     f"{f.canonical_name} names user-defined type {name!r} "
                     f"absent from the registry"
                 )
+
+
+def test_constants_read_extracted(solmate_facts: RepoFacts) -> None:
+    """Constants panel (spec §10.2): functions carry the ``constant`` variables
+    their own body reads, as well-formed declarations, de-duplicated. Solmate's
+    FixedPointMathLib reads its ``MAX_UINT256`` / ``WAD`` constants."""
+    all_fns = [f for c in solmate_facts.contracts for f in c.functions]
+    all_fns += list(solmate_facts.free_functions)
+    readers = [f for f in all_fns if f.constants]
+    assert readers, "expected at least one function reading a constant"
+    for f in all_fns:
+        canon = [k.canonical_name for k in f.constants]
+        assert len(canon) == len(set(canon)), f.canonical_name
+        for k in f.constants:
+            assert k.name and k.canonical_name.endswith(k.name)
+            assert "constant" in k.source_code, (f.canonical_name, k.source_code)
+            assert "immutable" not in k.source_code

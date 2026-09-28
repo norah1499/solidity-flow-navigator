@@ -70,6 +70,26 @@ class TypeDef:
 
 
 @dataclass(frozen=True, slots=True)
+class ConstantDef:
+    """A ``constant`` variable (contract-level or file-level) read by a function.
+
+    Surfaced so Layer 3 can show the declarations of the constants a function
+    body reads directly (spec §10.2 constants panel), alongside the
+    signature-type panel. ``canonical_name`` is Slither's (e.g.
+    ``"TickMath.MAX_TICK"``; the bare name for a file-level constant).
+    ``declarer_name`` is the declaring contract/library, or ``""`` for a
+    file-level constant. ``source_code`` is the declaration text, for Pygments
+    highlighting in Layer 3.
+    """
+
+    name: str
+    canonical_name: str
+    declarer_name: str
+    source_location: SourceLocation
+    source_code: str
+
+
+@dataclass(frozen=True, slots=True)
 class CallEdge:
     """One outgoing call from a function or modifier body.
 
@@ -161,6 +181,10 @@ class Function:
     # by Layer 2 (spec §10.2 / §11.3). Defaulted so synthetic Function
     # constructions (tests, getters) stay valid.
     signature_type_canonical_names: tuple[str, ...] = ()
+    # ``constant`` variables (contract- or file-level) read directly by this
+    # function's own body, de-duplicated, in first-read order (spec §10.2).
+    # Callees' reads are not included. Defaulted like the field above.
+    constants: tuple[ConstantDef, ...] = ()
 
     @property
     def contract_declarer_uid(self) -> tuple[str, str]:
