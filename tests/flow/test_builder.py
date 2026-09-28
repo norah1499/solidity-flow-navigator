@@ -17,6 +17,7 @@ import pytest
 
 from solidity_flow_navigator.analysis.types import (
     CallEdge,
+    ConstantDef,
     Contract,
     Function,
     RepoFacts,
@@ -122,6 +123,7 @@ def _bfunc(
     is_implemented: bool = True,
     calls: tuple[CallEdge, ...] = (),
     signature_type_canonical_names: tuple[str, ...] = (),
+    constants: tuple[ConstantDef, ...] = (),
 ) -> Function:
     return Function(
         canonical_name=f"{declarer}.{full_name}",
@@ -146,6 +148,7 @@ def _bfunc(
         source_code=f"function {full_name} external {{}}",
         calls=calls,
         signature_type_canonical_names=signature_type_canonical_names,
+        constants=constants,
     )
 
 
@@ -3089,3 +3092,54 @@ def test_canonical_name_collision_keeps_first_and_logs_once_per_pair(
     assert "'Foo'" in caplog.text
     assert "src/a/Foo.sol" in caplog.text and "src/b/Foo.sol" in caplog.text
     assert "2 function" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Constants panel (§10.2): Function.constants passes through to FunctionNode
+# unchanged, on the root and on every resolved child. Detection is Layer 1's
+# job (analysis integration test).
+# ---------------------------------------------------------------------------
+
+
+def _bconst(canonical: str, declarer: str = "C") -> ConstantDef:
+    name = canonical.split(".")[-1]
+    return ConstantDef(
+        name=name,
+        canonical_name=canonical,
+        declarer_name=declarer,
+        source_location=_bsl(),
+        source_code=f"uint256 constant {name} = 1",
+    )
+
+
+def test_constants_pass_through_root_and_child_in_order() -> None:
+    g = _bfunc("C", "g()", constants=(_bconst("Lib.WAD", "Lib"),))
+    f = _bfunc(
+        "C",
+        "f()",
+        is_entry_point=True,
+        calls=(_edge_to("internal", g, source_location=_bsl()),),
+        constants=(_bconst("C.MAX"), _bconst("FILE_C", "")),
+    )
+    facts = RepoFacts(
+        repo_path="/abs",
+        contracts=(_bcontract("C", functions=(f, g)),),
+        free_functions=(),
+    )
+    root = _flow_by_entry_point(build_flows(facts, Scope()), "C", "f()").root
+    assert [c.canonical_name for c in root.constants] == ["C.MAX", "FILE_C"]
+    assert root.constants == f.constants
+    (child,) = root.children
+    assert child.constants == g.constants
+
+
+def test_constants_default_empty() -> None:
+    facts = RepoFacts(
+        repo_path="/abs",
+        contracts=(
+            _bcontract("C", functions=(_bfunc("C", "f()", is_entry_point=True),)),
+        ),
+        free_functions=(),
+    )
+    root = _flow_by_entry_point(build_flows(facts, Scope()), "C", "f()").root
+    assert root.constants == ()

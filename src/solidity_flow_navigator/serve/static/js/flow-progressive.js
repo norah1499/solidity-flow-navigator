@@ -352,6 +352,53 @@
     wrap.appendChild(outer);
   }
 
+  // Constants panel (spec §10.2). A collapsed "constants:" disclosure under the
+  // type-definitions panel listing each `constant` (contract- or file-level)
+  // this function's body reads directly, as its highlighted declaration. Flat:
+  // one <pre> per constant, no per-item dropdowns. A name shared by 2+ distinct
+  // constants is shown qualified (canonical_name). A constant declared outside
+  // this node's own contract carries a muted origin caption (the declaring
+  // contract, or the file for a file-level constant). Open state shares the
+  // type-definitions store and data-td-key, so Expand all / Collapse all and
+  // per-Flow persistence cover it. Omitted when the body reads no constant.
+  function appendConstants(wrap, node) {
+    const consts = (node.constants || []).filter((c) => c && c.source_html);
+    if (consts.length === 0) return;
+    const canonsByName = {};
+    consts.forEach((c) => {
+      (canonsByName[c.name] = canonsByName[c.name] || new Set()).add(
+        c.canonical_name,
+      );
+    });
+    const displayName = (c) =>
+      canonsByName[c.name].size > 1 ? c.canonical_name || c.name : c.name;
+
+    const outer = el("details", "node-param-structs node-constants");
+    const key = node.__id + "::const";
+    outer.open = readOpenTypeDefs().has(key);
+    outer.dataset.tdKey = key;
+    outer.addEventListener("toggle", () => persistTypeDefOpen(key, outer.open));
+    outer.appendChild(
+      el(
+        "summary",
+        "node-param-structs-summary",
+        "constants: " + consts.map(displayName).join(", "),
+      ),
+    );
+    consts.forEach((c) => {
+      if (c.declarer_name !== node.declarer_contract_name) {
+        const origin = c.declarer_name
+          ? c.declarer_name
+          : (c.source_location && c.source_location.filename_relative) || "";
+        if (origin) outer.appendChild(el("div", "node-constant-origin", origin));
+      }
+      const pre = el("pre", "param-struct-body src");
+      pre.innerHTML = c.source_html;
+      outer.appendChild(pre);
+    });
+    wrap.appendChild(outer);
+  }
+
   // Expand all / Collapse all act on every type-definition dropdown in every
   // rendered node (spec §10.2), alongside the call-site expansion. Keyed by
   // data-td-key so the persisted open-set stays in sync; collapse-all clears the
@@ -457,6 +504,7 @@
     // source body with the full struct/enum definitions this function's
     // parameters/returns name (and their nested-struct closure).
     appendSignatureTypes(wrap, node);
+    appendConstants(wrap, node);
 
     if (node.source_html) {
       // v0.7.0 line-number gutter (spec §10.2). One <span class="line-num">

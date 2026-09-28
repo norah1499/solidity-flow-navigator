@@ -93,6 +93,9 @@ def _serialize_node(
         # into dicts; inject the highlighted body alongside the raw source_code.
         for t in d["signature_types"]:
             t["source_html"] = highlight_solidity(t["source_code"])
+        # Constants panel (spec §10.2): same treatment for each declaration.
+        for c in d["constants"]:
+            c["source_html"] = highlight_solidity(c["source_code"])
         d["children"] = [_serialize_node(c, bindings_ctx) for c in node.children]
     else:
         d = asdict(node)

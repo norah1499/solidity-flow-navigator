@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from solidity_flow_navigator.analysis.types import SourceLocation, TypeDef
+from solidity_flow_navigator.analysis.types import ConstantDef, SourceLocation, TypeDef
 from solidity_flow_navigator.flow.types import (
     Binding,
     Flow,
@@ -362,3 +362,50 @@ def test_signature_type_flow_is_json_dumpable() -> None:
     d = serialize_flow(_sig_type_flow())
     parsed = json.loads(json.dumps(d))
     assert parsed["root"]["signature_types"][0]["name"] == "MarketParams"
+
+
+# ---------------------------------------------------------------------------
+# Constants panel serialization (§10.2)
+# ---------------------------------------------------------------------------
+
+
+def _const_flow() -> Flow:
+    root = _fn(
+        constants=(
+            ConstantDef(
+                name="WAD",
+                canonical_name="FixedPointMathLib.WAD",
+                declarer_name="FixedPointMathLib",
+                source_location=_SL,
+                source_code="uint256 internal constant WAD = 1e18",
+            ),
+        )
+    )
+    return Flow(
+        entry_point_declarer_canonical_name="C.f()",
+        entry_point_invoker_canonical_name="C.f()",
+        entry_point_contract_name="C",
+        entry_point_function_name="f",
+        root=root,
+        unresolved_count=0,
+        max_depth=0,
+    )
+
+
+def test_constants_serialized_with_highlighted_body() -> None:
+    d = serialize_flow(_const_flow())
+    (c,) = d["root"]["constants"]
+    assert c["canonical_name"] == "FixedPointMathLib.WAD"
+    assert c["declarer_name"] == "FixedPointMathLib"
+    assert "<span" in c["source_html"]
+
+
+def test_no_constants_serializes_empty() -> None:
+    d = serialize_flow(_binding_flow())
+    assert d["root"]["constants"] == ()
+    assert "constants" not in d["root"]["children"][1]
+
+
+def test_constants_flow_is_json_dumpable() -> None:
+    parsed = json.loads(json.dumps(serialize_flow(_const_flow())))
+    assert parsed["root"]["constants"][0]["name"] == "WAD"

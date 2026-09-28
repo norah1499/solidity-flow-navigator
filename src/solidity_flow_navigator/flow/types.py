@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
 
-from solidity_flow_navigator.analysis.types import SourceLocation, TypeDef
+from solidity_flow_navigator.analysis.types import ConstantDef, SourceLocation, TypeDef
 
 
 class UnresolvedReason(StrEnum):
@@ -135,6 +135,11 @@ class FunctionNode:
     # struct's TypeDef.member_type_canonical_names (spec §10.2). Optional +
     # kw_only so existing constructions stay valid.
     signature_type_roots: tuple[str, ...] = field(default=(), kw_only=True)
+    # ``constant`` variables read directly by this node's body (spec §10.2
+    # constants panel). A Layer 1 fact (``ConstantDef``) passed through
+    # unchanged from ``Function.constants``. Optional + kw_only so existing
+    # constructions stay valid.
+    constants: tuple[ConstantDef, ...] = field(default=(), kw_only=True)
 
 
 @dataclass(frozen=True, slots=True)

@@ -23,11 +23,13 @@ from slither.core.solidity_types import (
     UserDefinedType,
 )
 from slither.core.variables.state_variable import StateVariable
+from slither.core.variables.top_level_variable import TopLevelVariable
 from slither.slithir.operations import (
     HighLevelCall,
     InternalCall,
     LibraryCall,
     LowLevelCall,
+    Member,
     NewContract,
     Operation,
     Send,
@@ -37,6 +39,7 @@ from slither.slithir.operations import (
 
 from .types import (
     CallEdge,
+    ConstantDef,
     Contract,
     Function,
     Parameter,
@@ -157,6 +160,7 @@ def _build_function(
     for p in list(f.parameters) + list(f.returns):
         _user_types_in(getattr(p, "type", None), sig_types)
     signature_type_canonical_names = tuple(dict.fromkeys(sig_types))
+    constants = _constants_read(f, repo_root)
     # Walk this function's OWN CFG nodes only. ``all_slithir_operations()``
     # would recursively flatten ops from every reachable callee into this
     # function's edge list, including ops inside library / assembly blocks
@@ -191,6 +195,55 @@ def _build_function(
         source_code=f.source_mapping.content or "",
         calls=calls,
         signature_type_canonical_names=signature_type_canonical_names,
+        constants=constants,
+    )
+
+
+def _constants_read(f: SlitherFunction, repo_root: Path) -> tuple[ConstantDef, ...]:
+    """``constant`` variables read directly by ``f``'s own body (spec §10.2).
+
+    Walks this function's own CFG nodes in source order (callees' reads are not
+    included), collecting state and file-level (top-level) variables marked
+    ``is_constant`` — immutables are excluded, their value is not in the
+    declaration. A qualified read such as ``Lib.X`` is not a plain variable
+    read in SlithIR but a ``Member`` op on the contract, so it is resolved
+    against that contract's state variables. ``node.variables_read`` is merged
+    in per node to cover nodes without IR (inline assembly). De-duplicated by
+    canonical name, first-read order.
+    """
+
+    seen: dict[str, ConstantDef] = {}
+
+    def record(v) -> None:
+        if not isinstance(v, (StateVariable, TopLevelVariable)) or not v.is_constant:
+            return
+        cd = _constant_def(v, repo_root)
+        seen.setdefault(cd.canonical_name, cd)
+
+    for node in f.nodes:
+        for op in node.irs:
+            if isinstance(op, Member) and isinstance(op.variable_left, SlitherContract):
+                record(
+                    op.variable_left.get_state_variable_from_name(
+                        str(op.variable_right)
+                    )
+                )
+                continue
+            for v in op.read:
+                record(v)
+        for v in node.variables_read:
+            record(v)
+    return tuple(seen.values())
+
+
+def _constant_def(v: StateVariable | TopLevelVariable, repo_root: Path) -> ConstantDef:
+    contract = getattr(v, "contract", None)
+    return ConstantDef(
+        name=v.name,
+        canonical_name=getattr(v, "canonical_name", None) or v.name,
+        declarer_name=contract.name if contract is not None else "",
+        source_location=_source_location(v.source_mapping, repo_root),
+        source_code=v.source_mapping.content or "",
     )
 
 

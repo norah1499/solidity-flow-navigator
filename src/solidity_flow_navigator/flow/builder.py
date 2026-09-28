@@ -312,6 +312,7 @@ class _FlowBuilder:
                 children=modifier_children + body_children,
                 signature_types=self._resolve_signature_types(entry_func),
                 signature_type_roots=self._signature_type_roots(entry_func),
+                constants=entry_func.constants,
             )
             unresolved_count, max_depth = _summarize_subtree(root_node)
             return Flow(
@@ -464,6 +465,7 @@ class _FlowBuilder:
             bound_via=bound_via,
             signature_types=self._resolve_signature_types(func),
             signature_type_roots=self._signature_type_roots(func),
+            constants=func.constants,
         )
 
     def _terminal_function_node(
@@ -496,6 +498,7 @@ class _FlowBuilder:
             bound_via=bound_via,
             signature_types=self._resolve_signature_types(func),
             signature_type_roots=self._signature_type_roots(func),
+            constants=func.constants,
         )
 
     def _invoker_name(self) -> str:
